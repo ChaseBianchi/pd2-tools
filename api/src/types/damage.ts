@@ -75,6 +75,9 @@ export interface DamageComponent {
   timing: DamageComponentTiming;
   damage: DamageRange;
   baseDamage?: DamageRange;
+  physicalBonusPercent?: number;
+  damageEventsPerUnit?: number;
+  targetDamageBonuses?: { demon: number; undead: number };
   poisonDamage?: PoisonDamage;
   includedInTotal?: boolean;
   sourceRefs: DamageSourceReference[];
@@ -136,6 +139,8 @@ export interface DamageAuraOption {
   levelOptions: number[];
   levelBonuses: DamageAuraLevelBonus[];
   selfLevelBonuses: DamageAuraLevelBonus[];
+  selfLevelBonusesByWeaponSet?: Record<"primary" | "secondary", DamageAuraLevelBonus[]>;
+  summonLevelBonusesByWeaponSet?: Record<"primary" | "secondary", DamageAuraLevelBonus[]>;
   partyLevelBonuses: DamageAuraLevelBonus[];
   source: "none" | "character_skill" | "manual";
 }
@@ -211,6 +216,10 @@ export interface DamageProfileScope {
 }
 
 export interface DamageProfile {
+  targetModifiers?: {
+    resistancePierce: Partial<Record<DamageElement, number>>;
+    convictionLevel: number;
+  };
   key: string;
   weaponId: string;
   skillId: string;
@@ -219,6 +228,7 @@ export interface DamageProfile {
   playerAuraLevel: number;
   transformationId: string;
   skillDamageMode: "weapon" | "spell" | "summon";
+  attackDamageMultiplier?: number;
   skillName: string;
   sourceSkillName?: string;
   summonVariant?: string;

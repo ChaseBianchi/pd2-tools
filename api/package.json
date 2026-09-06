@@ -12,7 +12,7 @@
     "dev": "ts-node src/index.ts",
     "economy": "node dist/jobs/economy.js",
     "jobs": "node dist/jobs.js",
-    "damage:qa": "tsc --noEmit && jest --runInBand src/utils/damage-calculator.test.ts --no-forceExit",
+    "damage:qa": "tsc --noEmit && jest --runInBand src/utils/damage-calculator.test.ts src/utils/damage-calculator-mechanics.test.ts src/utils/game-formula.test.ts src/utils/damage-targets.test.ts src/utils/item-stat-expansion.test.ts src/utils/character-stats.test.ts src/utils/skill-calculator.test.ts --no-forceExit",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },

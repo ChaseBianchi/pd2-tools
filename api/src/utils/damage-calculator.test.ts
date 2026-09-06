@@ -9,6 +9,8 @@ const requiredGameFiles = [
   "SkillDesc.txt",
   "Properties.txt",
   "ItemStatCost.txt",
+  "Armor.txt",
+  "MonStats.txt",
 ];
 const gameDataPath = path.resolve(
   process.cwd(),
@@ -17,9 +19,13 @@ const gameDataPath = path.resolve(
   "pd2",
   "season-13"
 );
-const hasRequiredGameData = requiredGameFiles.every((fileName) =>
-  fs.existsSync(path.join(gameDataPath, fileName))
-);
+beforeAll(() => {
+  for (const fileName of requiredGameFiles) {
+    if (!fs.existsSync(path.join(gameDataPath, fileName))) {
+      throw new Error(`Required committed game table missing: ${fileName}`);
+    }
+  }
+});
 
 type DamageCalculatorModule = typeof import("./damage-calculator");
 let calculateDamage: DamageCalculatorModule["calculateDamage"];
@@ -365,16 +371,6 @@ function createCharacter(skillName: string, level: number): CharacterData {
   } as unknown as CharacterData;
 }
 
-const describeWithGameData = hasRequiredGameData ? describe : describe.skip;
-const describeWithArmorData =
-  hasRequiredGameData && fs.existsSync(path.join(gameDataPath, "Armor.txt"))
-    ? describe
-    : describe.skip;
-const describeWithMonStatsData =
-  hasRequiredGameData && fs.existsSync(path.join(gameDataPath, "MonStats.txt"))
-    ? describe
-    : describe.skip;
-
 function loadGameFile(fileName: string, keyColumn: string) {
   const text = fs
     .readFileSync(path.join(gameDataPath!, fileName), "utf8")
@@ -661,12 +657,12 @@ function getExpectedVenomPoisonPayloadFromSkillsTxt(
   const synergyPercent =
     cobraStrikeBaseLevel * getGameFileNumber(skills, row, "Param8");
   const withSynergy = {
-    min: Math.floor(min * durationFrames * (1 + synergyPercent / 100)),
-    max: Math.floor(max * durationFrames * (1 + synergyPercent / 100)),
+    min: Math.floor(min * 256 * (100 + synergyPercent) / 100),
+    max: Math.floor(max * 256 * (100 + synergyPercent) / 100),
   };
   const damage = {
-    min: Math.floor(withSynergy.min * (1 + poisonSkillDamage / 100)),
-    max: Math.floor(withSynergy.max * (1 + poisonSkillDamage / 100)),
+    min: Math.floor(Math.floor(withSynergy.min * (100 + poisonSkillDamage) / 100) * durationFrames / 256),
+    max: Math.floor(Math.floor(withSynergy.max * (100 + poisonSkillDamage) / 100) * durationFrames / 256),
   };
 
   return {
@@ -709,10 +705,10 @@ function getExpectedHydraFirePayloadFromSkillsTxt(
 
   return {
     min: Math.floor(
-      Math.floor(min * (1 + synergyPercent / 100)) * (1 + masteryPercent / 100)
+      Math.floor(min * 256 * (100 + synergyPercent) / 100) * (100 + masteryPercent) / 25600
     ),
     max: Math.floor(
-      Math.floor(max * (1 + synergyPercent / 100)) * (1 + masteryPercent / 100)
+      Math.floor(max * 256 * (100 + synergyPercent) / 100) * (100 + masteryPercent) / 25600
     ),
   };
 }
@@ -727,17 +723,18 @@ function getExpectedSkeletalMagePayloadFromGameFiles(
   const mageRow = skills.rowsByKey.get("Raise Skeletal Mage")!;
   const masteryRow = skills.rowsByKey.get("Skeleton Mastery")!;
   const missileRow = missiles.rowsByKey.get(missileName)!;
+  const missileLevel = skeletonMasteryLevel + Math.max(0, Math.floor((mageLevel - 2) / 2));
   const min = getSourceLevelScaledValue(
     missiles,
     missileRow,
-    mageLevel,
+    Math.max(1, missileLevel),
     "EMin",
     ["MinELev1", "MinELev2", "MinELev3", "MinELev4", "MinELev5"]
   );
   const max = getSourceLevelScaledValue(
     missiles,
     missileRow,
-    mageLevel,
+    Math.max(1, missileLevel),
     "Emax",
     ["MaxELev1", "MaxELev2", "MaxELev3", "MaxELev4", "MaxELev5"]
   );
@@ -804,13 +801,13 @@ function getExpectedPlaguePoppyPoisonPayloadFromGameFiles({
   );
 
   const withSynergy = {
-    min: Math.floor(min * durationFrames * (1 + synergyPercent / 100)),
-    max: Math.floor(max * durationFrames * (1 + synergyPercent / 100)),
+    min: Math.floor(min * 256 * (100 + synergyPercent) / 100),
+    max: Math.floor(max * 256 * (100 + synergyPercent) / 100),
   };
 
   return {
-    min: Math.floor(withSynergy.min * (1 + synergyPercent / 100)),
-    max: Math.floor(withSynergy.max * (1 + synergyPercent / 100)),
+    min: Math.floor(Math.floor(withSynergy.min * (100 + synergyPercent) / 100) * durationFrames / 256),
+    max: Math.floor(Math.floor(withSynergy.max * (100 + synergyPercent) / 100) * durationFrames / 256),
   };
 }
 
@@ -966,7 +963,7 @@ function getExpectedSkeletonArcherDirectPhysicalFromGameFiles({
   };
 }
 
-describeWithGameData("damage calculator component model", () => {
+describe("damage calculator component model", () => {
   beforeAll(async () => {
     ({ calculateDamage } = await import("./damage-calculator"));
   });
@@ -1524,38 +1521,19 @@ describeWithGameData("damage calculator component model", () => {
         max: 200 + normalItemElemental.lightning.max + flatSkillBase.max,
       },
     };
-    const withVengeancePercent = Object.fromEntries(
-      (["fire", "cold", "lightning"] as const).map((element) => [
-        element,
-        {
-          min: Math.floor(
-            vengeanceBaseByElement[element].min * (1 + percent / 100)
-          ),
-          max: Math.floor(
-            vengeanceBaseByElement[element].max * (1 + percent / 100)
-          ),
-        },
-      ])
+    const expectedVengeanceDamage = Object.fromEntries(
+      (["fire", "cold", "lightning"] as const).map((element) => {
+        const mastery = element === "fire" ? fireSkillDamage : element === "cold" ? coldSkillDamage : 0;
+        const scale = (value: number) => {
+          const afterSynergy = Math.floor(value * 256 * (100 + percent) / 100);
+          return Math.floor(Math.floor(afterSynergy * (100 + mastery) / 100) / 256);
+        };
+        return [element, {
+          min: scale(vengeanceBaseByElement[element].min),
+          max: scale(vengeanceBaseByElement[element].max),
+        }];
+      })
     ) as Record<"fire" | "cold" | "lightning", DamageRange>;
-    const expectedVengeanceDamage = {
-      fire: {
-        min: Math.floor(
-          withVengeancePercent.fire.min * (1 + fireSkillDamage / 100)
-        ),
-        max: Math.floor(
-          withVengeancePercent.fire.max * (1 + fireSkillDamage / 100)
-        ),
-      },
-      cold: {
-        min: Math.floor(
-          withVengeancePercent.cold.min * (1 + coldSkillDamage / 100)
-        ),
-        max: Math.floor(
-          withVengeancePercent.cold.max * (1 + coldSkillDamage / 100)
-        ),
-      },
-      lightning: withVengeancePercent.lightning,
-    };
 
     expect(vengeanceOption).toMatchObject({ damageMode: "weapon" });
     expect(vengeanceProfile).toBeDefined();
@@ -2713,7 +2691,7 @@ describeWithGameData("damage calculator component model", () => {
 
     expect(meteorProfile).toBeDefined();
     expect(meteorProfile!.damageScope.label).toBe(
-      "per impact plus ground fire"
+      "per impact"
     );
     expect(meteorProfile!.damageScope.note).toContain("meteorfire");
 
@@ -2727,20 +2705,20 @@ describeWithGameData("damage calculator component model", () => {
 
     expect(moltenBoulderProfile).toBeDefined();
     expect(moltenBoulderProfile!.damageScope.label).toBe(
-      "per impact plus fire path"
+      "per impact"
     );
     expect(moltenBoulderProfile!.damageScope.note).toContain(
       "moltenboulderfirepath"
     );
 
     for (const [skillName, expectedLabel, expectedNote] of [
-      ["Fire Arrow", "per impact plus fire wall", "firearrow firewall"],
+      ["Fire Arrow", "per impact", "firearrow firewall"],
       [
         "Immolation Arrow",
-        "per impact plus fire patches",
+        "per impact",
         "server-reachable fire patch",
       ],
-      ["Armageddon", "per impact plus ground fire", "armageddonfire"],
+      ["Armageddon", "per impact", "armageddonfire"],
       ["Thunder Storm", "per strike plus nova", "thunderstormnova"],
     ] as const) {
       const character = createCharacter(skillName, 20);
@@ -3704,7 +3682,7 @@ describeWithGameData("damage calculator component model", () => {
     ).toBe(false);
     expect(magicArrowProfile?.breakdown.flatPhysicalDamage).toEqual({
       min: 12,
-      max: 12,
+      max: 0,
     });
     expect(magicArrowProfile?.damageTotals.combinedDamage.max).toBeGreaterThan(
       0
@@ -3844,7 +3822,7 @@ describeWithGameData("damage calculator component model", () => {
   });
 });
 
-describeWithMonStatsData("summon damage modeling", () => {
+describe("summon damage modeling", () => {
   beforeAll(async () => {
     ({ calculateDamage } = await import("./damage-calculator"));
   });
@@ -4051,7 +4029,7 @@ describeWithMonStatsData("summon damage modeling", () => {
     );
   });
 
-  it("applies Skeleton Mastery once to skeleton archer direct and flat physical damage", () => {
+  it("applies skeleton archer source synergy and summoned-unit damage bonuses separately", () => {
     const archerLevel = 20;
     const raiseSkeletonBaseLevel = 20;
     const skeletonMasteryLevel = 20;
@@ -4116,7 +4094,10 @@ describeWithMonStatsData("summon damage modeling", () => {
 
     expect(directComponent).toMatchObject({
       damageType: "physical",
-      damage: expectedDirectPhysical,
+      damage: {
+        min: Math.floor(expectedDirectPhysical.min * (100 + damagePercent) / 100),
+        max: Math.floor(expectedDirectPhysical.max * (100 + damagePercent) / 100),
+      },
     });
     expect(flatPhysicalComponent).toMatchObject({
       damageType: "physical",
@@ -4124,8 +4105,8 @@ describeWithMonStatsData("summon damage modeling", () => {
       damage: expectedFlatPhysical.damage,
     });
     expect(archerProfile?.damageTotals.combinedDamage).toEqual({
-      min: expectedDirectPhysical.min + expectedFlatPhysical.damage.min,
-      max: expectedDirectPhysical.max + expectedFlatPhysical.damage.max,
+      min: Math.floor(expectedDirectPhysical.min * (100 + damagePercent) / 100) + expectedFlatPhysical.damage.min,
+      max: Math.floor(expectedDirectPhysical.max * (100 + damagePercent) / 100) + expectedFlatPhysical.damage.max,
     });
     expect(archerProfile?.breakdown.physicalBonusPercent.selectedSkill).toBe(
       damagePercent
@@ -4158,7 +4139,7 @@ describeWithMonStatsData("summon damage modeling", () => {
     const calculation = calculateDamage(character);
     const fireGolemProfile = calculation.profiles.find(
       (profile) =>
-        profile.skillId === "FireGolem" && profile.playerAuraId === "none"
+        profile.skillId === "FireGolem::normal" && profile.playerAuraId === "none"
     );
     const hydraProfile = calculation.profiles.find(
       (profile) =>
@@ -4380,7 +4361,7 @@ describeWithMonStatsData("summon damage modeling", () => {
     const calculation = calculateDamage(character);
     const clayProfile = calculation.profiles.find(
       (profile) =>
-        profile.skillId === "Clay Golem" && profile.playerAuraId === "none"
+        profile.skillId === "Clay Golem::normal" && profile.playerAuraId === "none"
     );
     const monsterComponent = clayProfile?.damageComponents.find(
       (component) => component.source === "monster"
@@ -4439,7 +4420,7 @@ describeWithMonStatsData("summon damage modeling", () => {
   });
 });
 
-describeWithArmorData("armory payload attack enrichment", () => {
+describe("armory payload attack enrichment", () => {
   beforeAll(async () => {
     ({ calculateDamage } = await import("./damage-calculator"));
     ({ enrichArmoryPayload } = await import("./armory-payload"));

@@ -39,6 +39,27 @@ function roundStrikeValue(value: number) {
   return Number(value.toFixed(3));
 }
 
+export function selectPrecomputedAuraProfileIndex(
+  candidates: Array<{ profile: DamageProfile | null; skillLevelBonus: number }>
+): number {
+  return candidates.reduce((selected, candidate, index) => {
+    if (!candidate.profile) return selected;
+    return selected < 0 || candidate.skillLevelBonus > candidates[selected].skillLevelBonus
+      ? index : selected;
+  }, -1);
+}
+
+export function getCarriedDamageDelta(
+  next: DamageRange, previous: DamageRange | undefined, multiplier: number
+): DamageRange {
+  // Each complete hit is rounded before comparing aura levels. Rounding the
+  // difference loses damage when the two levels cross an integer boundary.
+  return {
+    min: Math.floor(next.min * multiplier) - Math.floor((previous?.min || 0) * multiplier),
+    max: Math.floor(next.max * multiplier) - Math.floor((previous?.max || 0) * multiplier),
+  };
+}
+
 export function rescalePhysicalComponents(
   components: DamageProfile["damageComponents"],
   previousMultiplier: number,
@@ -59,15 +80,23 @@ export function rescalePhysicalComponents(
           ? component.damage.max
           : component.damage.max / previousMultiplier,
     };
+    // Different hands and summon components can have different base bonuses.
+    // Apply the selected aura/form delta to each component's own bonus.
+    const previousBonus = component.physicalBonusPercent ??
+      Number(((previousMultiplier - 1) * 100).toFixed(6));
+    const nextBonus = previousBonus +
+      Number(((nextMultiplier - previousMultiplier) * 100).toFixed(6));
+    const min = Math.max(0, Math.floor(baseDamage.min * (100 + nextBonus) / 100));
 
     return {
       ...component,
       baseDamage,
+      physicalBonusPercent: nextBonus,
       damage: {
-        min: Math.floor(baseDamage.min * nextMultiplier),
+        min,
         max: Math.max(
-          Math.floor(baseDamage.min * nextMultiplier),
-          Math.floor(baseDamage.max * nextMultiplier)
+          min,
+          Math.floor(baseDamage.max * (100 + nextBonus) / 100)
         ),
       },
     };
@@ -154,6 +183,7 @@ export function rebuildStrikeDamageComponents(
         const component = componentsById.get(componentId);
         return component &&
           component.damageType === "physical" &&
+          component.includedInTotal !== false &&
           component.timing === "instant"
           ? addRange(total, component.damage)
           : total;

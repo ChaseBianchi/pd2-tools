@@ -1,0 +1,2 @@
+# Preserve extracted TSV bytes; trailing tabs represent empty game-table cells.
+api/src/game-data/pd2/**/*.txt -text whitespace=-blank-at-eol

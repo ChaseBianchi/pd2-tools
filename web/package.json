@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "damage:qa": "tsc -b tsconfig.damage.json && vitest run src/utils/damage-profile-adjustments.test.ts src/utils/target-damage.test.ts"
   },
   "dependencies": {
     "@mantine/charts": "7.14.2",

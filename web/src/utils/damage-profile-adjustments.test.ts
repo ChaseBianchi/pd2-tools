@@ -8,7 +8,16 @@ import {
   applyStrikeModifierDelta,
   rebuildStrikeDamageComponents,
   rescalePhysicalComponents,
+  selectPrecomputedAuraProfileIndex,
+  getCarriedDamageDelta,
 } from "./damage-profile-adjustments";
+
+it("rounds source-scaled aura hits before taking the level delta", () => {
+  expect(getCarriedDamageDelta({ min: 4, max: 6 }, { min: 3, max: 5 }, 0.5))
+    .toEqual({ min: 1, max: 1 });
+  expect(getCarriedDamageDelta({ min: 3, max: 5 }, { min: 4, max: 6 }, 0.5))
+    .toEqual({ min: -1, max: -1 });
+});
 
 const EMPTY_STRIKE_MODIFIERS: DamageStrikeModifiers = {
   criticalChance: 0,
@@ -56,6 +65,47 @@ function createPhysicalComponent(
 }
 
 describe("damage profile strike adjustments", () => {
+  it("keeps each hand's bonuses when an aura is added and removed", () => {
+    const components = [
+      { ...createPhysicalComponent("right", 200, 400), baseDamage: { min: 100, max: 200 }, physicalBonusPercent: 100 },
+      { ...createPhysicalComponent("left", 75, 120), baseDamage: { min: 50, max: 80 }, physicalBonusPercent: 50 },
+    ];
+    const buffed = rescalePhysicalComponents(components, 2, 2.5);
+    expect(buffed.map((component) => component.damage)).toEqual([
+      { min: 250, max: 500 }, { min: 100, max: 160 },
+    ]);
+    expect(rescalePhysicalComponents(buffed, 2.5, 2).map((component) => component.damage))
+      .toEqual(components.map((component) => component.damage));
+  });
+
+  it("does not lose a damage point to binary floating point multiplication", () => {
+    const component = {
+      ...createPhysicalComponent("physical", 100, 200),
+      baseDamage: { min: 100, max: 200 }, physicalBonusPercent: 0,
+    };
+    expect(rescalePhysicalComponents([component], 1, 2.05)[0].damage)
+      .toEqual({ min: 205, max: 410 });
+  });
+
+  it("prioritizes a usable +skills profile regardless of aura row order", () => {
+    const profile = { skillLevel: 23 } as import("../types").DamageProfile;
+    expect(selectPrecomputedAuraProfileIndex([
+      { profile, skillLevelBonus: 0 }, { profile, skillLevelBonus: 3 },
+    ])).toBe(1);
+    expect(selectPrecomputedAuraProfileIndex([
+      { profile, skillLevelBonus: 3 }, { profile, skillLevelBonus: 0 },
+    ])).toBe(0);
+    expect(selectPrecomputedAuraProfileIndex([
+      { profile: null, skillLevelBonus: 3 }, { profile, skillLevelBonus: 1 },
+    ])).toBe(1);
+  });
+
+  it("does not give excluded physical components strike damage", () => {
+    const component = { ...createPhysicalComponent("physical", 100, 200), includedInTotal: false };
+    expect(rebuildStrikeDamageComponents([component], [createStrike({ criticalChance: 50 })]))
+      .toEqual([component]);
+  });
+
   it("applies multiple strike aura deltas in sequence with caps and CS-first DS effectiveness", () => {
     const firstAura: DamageStrikeModifiers = {
       criticalChance: 20,

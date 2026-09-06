@@ -6,7 +6,7 @@ import { CharacterResponse, ICharacter, IItem, ILocation } from "../types";
 function createMockCharacter(
   className: string,
   skills: Array<{ name: string; level: number }>,
-  items: Array<{ name: string; properties: string[]; location?: ILocation }>
+  items: Array<{ name: string; properties: string[]; location?: ILocation; base?: IItem["base"] }>
 ): CharacterResponse {
   return {
     character: {
@@ -25,6 +25,7 @@ function createMockCharacter(
     } as ICharacter,
     items: items.map((item) => ({
       name: item.name,
+      base: item.base,
       properties: item.properties,
       location: item.location || { equipment: "Body Armor", x: 0, y: 0 },
       quality: { name: "Unique" },
@@ -492,6 +493,7 @@ describe("D2SkillParser", () => {
     it("should apply Druid skill bonuses from equipped items and inventory charms", () => {
       const shapeCharm = (index: number) => ({
         name: `Spiritual Grand Charm ${index}`,
+        base: { type_code: "char" } as IItem["base"],
         properties: ["+1 to Shape Shifting Skills (Druid Only)"],
         location: {
           storage: "Inventory",

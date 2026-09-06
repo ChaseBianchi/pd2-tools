@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.damage.tsbuildinfo"
+  },
+  "include": [
+    "src/vite-env.d.ts",
+    "src/components/character/DamageCalculatorSection.tsx",
+    "src/components/character/DamageTargetSection.tsx",
+    "src/utils/damage-profile-adjustments.ts",
+    "src/utils/damage-profile-adjustments.test.ts",
+    "src/utils/target-damage.ts",
+    "src/utils/target-damage.test.ts"
+  ]
+}

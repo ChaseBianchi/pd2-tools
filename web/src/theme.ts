@@ -14,7 +14,6 @@ const dark: MantineColorsTuple = [
 ];
 
 export const customDarkTheme = createTheme({
-  colorScheme: "dark",
   colors: {
     dark,
   },
