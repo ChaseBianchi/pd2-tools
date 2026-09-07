@@ -10,6 +10,8 @@ export interface TargetConditions {
   sanctuary: number;
   staticField: number;
   inferno: number;
+  arcticBlast: number;
+  plaguePoppy: number;
   addedResistances: Partial<TargetResistances>;
   protected: boolean;
   immunityAura: boolean;
@@ -18,6 +20,7 @@ export interface TargetConditions {
 export const EMPTY_TARGET_CONDITIONS: TargetConditions = {
   conviction: 0, lowerResist: 0, amplifyDamage: 0, battleCry: 0,
   decrepify: 0, sanctuary: 0, staticField: 0, inferno: 0,
+  arcticBlast: 0, plaguePoppy: 0,
   addedResistances: {}, protected: false, immunityAura: false,
 };
 export const DAMAGE_ELEMENTS: DamageElement[] = ["physical", "fire", "cold", "lightning", "magic", "poison"];
@@ -29,16 +32,26 @@ const positive = (n: number) => Number.isFinite(n) ? Math.max(0, n) : 0;
 
 export function getEffectiveResistance(base: number, reductions: number[], pierce: number): number {
   // PD2 immunity breakers work at half strength against an immune base.
-  // Pierce is applied only after immunity is broken, with a zero resistance floor.
-  const reduced = base - reductions.reduce((sum, value) => sum + Math.floor(positive(value) / (base >= 100 ? 2 : 1)), 0);
-  return reduced >= 100 ? reduced : Math.max(0, reduced - Math.floor(positive(pierce)));
+  // Pierce is applied only after immunity is broken. Reduction beyond zero is
+  // halved, while an already-negative base resistance remains unchanged.
+  const breakerReduction = reductions.reduce((sum, value) => sum + Math.floor(positive(value) / (base >= 100 ? 2 : 1)), 0);
+  const reduced = base - breakerReduction;
+  if (reduced >= 100) return reduced;
+  const totalReduction = breakerReduction + Math.floor(positive(pierce));
+  const fullStrengthReduction = Math.min(totalReduction, Math.max(0, base));
+  const diminishedReduction = Math.floor((totalReduction - fullStrengthReduction) / 2);
+  return Math.max(-100, base - fullStrengthReduction - diminishedReduction);
+}
+
+export function getActiveConvictionLevel(profile: DamageProfile): number {
+  return Math.max(
+    profile.targetModifiers?.convictionLevel || 0,
+    ...profile.activeAuras.filter((aura) => aura.name === "Conviction").map((aura) => aura.level)
+  );
 }
 
 function getTargetPierce(profile: DamageProfile, element: DamageElement) {
-  const isPet = profile.skillDamageMode === "summon" ||
-    /^(?:Wake of Fire|Wake of Inferno|Inferno Sentry|Lightning Sentry|Chain Lightning Sentry|Death Sentry|Hydra|Lesser Hydra)$/.test(profile.sourceSkillName || profile.skillName);
-  const pierce = profile.targetModifiers?.resistancePierce[element] || 0;
-  return isPet ? element === "physical" ? 0 : Math.floor(pierce / 2) : pierce;
+  return profile.targetModifiers?.resistancePierce[element] || 0;
 }
 
 export function targetResistances(profile: DamageProfile, stats: MonsterTargetStats, conditions: TargetConditions): TargetResistances {
@@ -50,7 +63,8 @@ export function targetResistances(profile: DamageProfile, stats: MonsterTargetSt
       ? [conditions.battleCry, curseStrength(conditions.amplifyDamage), curseStrength(conditions.decrepify)]
       : element === "magic" ? [conditions.sanctuary]
         : [element === "poison" ? 0 : conditions.conviction, curseStrength(conditions.lowerResist),
-          element === "fire" ? conditions.inferno : element === "lightning" ? conditions.staticField : 0];
+          element === "fire" ? conditions.inferno : element === "cold" ? conditions.arcticBlast
+            : element === "lightning" ? conditions.staticField : element === "poison" ? conditions.plaguePoppy : 0];
     const inheritedPierce = getTargetPierce(profile, element);
     const base = stats.resistances[element] + (conditions.addedResistances[element] || 0) + (stats.receivesImmunityAura && conditions.immunityAura ? 200 : 0);
     return [element, getEffectiveResistance(base, reductions, inheritedPierce)];
@@ -61,6 +75,7 @@ export interface TargetDamageResult {
   totals: DamageTotals;
   pulseTotals?: DamageTotals;
   resistances: TargetResistances;
+  physicalResistanceRange?: DamageRange;
   absorptionHealing: DamageRange;
   pulseAbsorptionHealing?: DamageRange;
 }
@@ -76,10 +91,20 @@ export function calculateTargetDamage(
 ): TargetDamageResult {
   const resistances = targetResistances(profile, stats, conditions);
   const absorptionHealing = empty();
-  const mitigate = (value: number, element: DamageElement, flat = true) => {
+  const curseAllowed = stats.curseResistance < 100;
+  const curseStrength = (value: number) => curseAllowed
+    ? Math.floor(value * (100 - Math.min(100, stats.curseEffectReduction)) / 100) : 0;
+  const physicalResistance = (pierce: number) => getEffectiveResistance(
+    stats.resistances.physical + (conditions.addedResistances.physical || 0) +
+      (stats.receivesImmunityAura && conditions.immunityAura ? 200 : 0),
+    [conditions.battleCry, curseStrength(conditions.amplifyDamage), curseStrength(conditions.decrepify)],
+    pierce
+  );
+  const mitigate = (value: number, element: DamageElement, flat = true, pierce?: number) => {
     if (conditions.protected) return { damage: 0, heal: 0 };
     const reduction = !flat || element === "poison" ? 0 : element === "physical" ? stats.flatPhysicalReduction : stats.flatMagicReduction;
-    let damage = fixed(fixed(value - reduction) * Math.max(0, 100 - resistances[element]) / 100);
+    const resistance = pierce === undefined ? resistances[element] : physicalResistance(pierce);
+    let damage = fixed(fixed(value - reduction) * Math.max(0, 100 - resistance) / 100);
     const percentAbsorb = fixed(damage * Math.min(40, positive(stats.absorbPercent[element] || 0)) / 100);
     damage -= percentAbsorb;
     const flatAbsorb = flat ? Math.min(damage, positive(stats.absorbFlat[element] || 0)) : 0;
@@ -112,7 +137,7 @@ export function calculateTargetDamage(
       const damage = empty();
       for (const side of ["min", "max"] as const) {
         for (const outcome of outcomes) {
-          const hit = mitigate(base[side] * outcome.multiplier, "physical");
+          const hit = mitigate(base[side] * outcome.multiplier, "physical", true, strike.resistancePierce);
           damage[side] += hit.damage * outcome.chance;
         }
       }
@@ -142,7 +167,7 @@ export function calculateTargetDamage(
       if (group.element === "poison" && duration) {
         const frames = Math.round(duration * 25);
         // Monster poison-length resistance has no player difficulty penalty.
-        const lengthResist = Math.min(75, Math.max(0, stats.poisonLengthReduction - getTargetPierce(profile, "poison")));
+        const lengthResist = Math.min(75, Math.max(-100, stats.poisonLengthReduction - getTargetPierce(profile, "poison")));
         const nextFrames = Math.floor(frames * (100 - lengthResist) / 100);
         duration = nextFrames / 25;
         damage.min = fixed(damage.min * nextFrames / frames);
@@ -162,7 +187,14 @@ export function calculateTargetDamage(
   const pulseAbsorptionHealing = empty();
   const pulseTotals = profile.auraPulseDamageComponents?.length
     ? calculate(profile.auraPulseDamageComponents, [], pulseAbsorptionHealing) : undefined;
-  return { totals, pulseTotals, resistances, absorptionHealing, pulseAbsorptionHealing: pulseTotals ? pulseAbsorptionHealing : undefined };
+  const strikeResistances = profile.strikeBreakdowns.map((strike) =>
+    physicalResistance(strike.resistancePierce ?? getTargetPierce(profile, "physical"))
+  );
+  const physicalResistanceRange = strikeResistances.length
+    ? { min: Math.min(...strikeResistances), max: Math.max(...strikeResistances) }
+    : undefined;
+  return { totals, pulseTotals, resistances, physicalResistanceRange, absorptionHealing,
+    pulseAbsorptionHealing: pulseTotals ? pulseAbsorptionHealing : undefined };
 }
 
 export function averageTargetDamage(results: TargetDamageResult[]): DamageTotals | undefined {

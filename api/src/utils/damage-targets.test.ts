@@ -67,6 +67,12 @@ describe("source-backed target catalog", () => {
     expect(catalog.maps.find((map) => map.id === "183")!.monsterIds).toHaveLength(6); // duplicate mosquito slot
     expect(catalog.maps.find((map) => map.id === "194")).toBeUndefined(); // no random spawns, despite stale nmon cells
   });
+  it("assigns map tiers from Hell expansion area levels", () => {
+    expect(catalog.maps.find((map) => map.id === "146")!.tier).toBe(1); // Ancestral Trial
+    expect(catalog.maps.find((map) => map.id === "175")!.tier).toBe(2); // Ashen Plains
+    expect(catalog.maps.find((map) => map.id === "201")!.tier).toBe(3); // Kyovashad
+    expect(catalog.maps.find((map) => map.id === "164")!.tier).toBeNull(); // dungeon
+  });
   it("keeps all resistances and reductions finite across the entire catalog", () => {
     for (const target of catalog.monsters) for (const stats of Object.values(target.difficulties)) {
       for (const value of Object.values(stats.resistances)) expect(Number.isFinite(value)).toBe(true);

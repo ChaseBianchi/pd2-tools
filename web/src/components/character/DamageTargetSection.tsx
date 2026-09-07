@@ -4,7 +4,7 @@ import { Alert, Badge, Card, Checkbox, Collapse, Group, NumberInput, SegmentedCo
 import { apiClient } from "../../api";
 import type { DamageProfile, DamageRange } from "../../types/damage";
 import type { DamageTargetCatalog, TargetDifficulty } from "../../types/damage-target";
-import { averageTargetDamage, calculateTargetDamage, DAMAGE_ELEMENTS, EMPTY_TARGET_CONDITIONS } from "../../utils/target-damage";
+import { averageTargetDamage, calculateTargetDamage, DAMAGE_ELEMENTS, EMPTY_TARGET_CONDITIONS, getActiveConvictionLevel } from "../../utils/target-damage";
 
 const number = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 1 });
 const range = (value?: DamageRange) => value ? `${number(value.min)} – ${number(value.max)}` : "0";
@@ -20,15 +20,15 @@ export function DamageTargetSection({ profile }: { profile: DamageProfile }) {
   const [conditions, setConditions] = useState(EMPTY_TARGET_CONDITIONS);
   const [convictionOverride, setConvictionOverride] = useState<number | undefined>();
   const catalog = useQuery({
-    queryKey: ["damage-targets", 13, 1],
-    queryFn: () => apiClient.get<DamageTargetCatalog>("/damage-targets?model=1"),
+    queryKey: ["damage-targets", 13, 2],
+    queryFn: () => apiClient.get<DamageTargetCatalog>("/damage-targets?model=2"),
     enabled, staleTime: 60 * 60 * 1000, retry: false,
   });
   const monsters = useMemo(() => new Map(catalog.data?.monsters.map((monster) => [monster.id, monster])), [catalog.data]);
   const map = catalog.data?.maps.find((candidate) => candidate.id === mapId);
   const selectedMonster = monsterId ? monsters.get(monsterId) : undefined;
   const activeDifficulty = mode === "map" ? "hell" : difficulty;
-  const convictionLevel = convictionOverride ?? profile.targetModifiers?.convictionLevel ?? 0;
+  const convictionLevel = convictionOverride ?? getActiveConvictionLevel(profile);
   // Skills.txt Conviction aurastatcalc2 = -min(12 + 2*(lvl-1),150).
   const activeConditions = {
     ...conditions, protected: mode === "monster" && conditions.protected,
@@ -56,6 +56,18 @@ export function DamageTargetSection({ profile }: { profile: DamageProfile }) {
       })),
     }));
   }, [catalog.data]);
+  const mapOptions = useMemo(() => {
+    if (!catalog.data) return [];
+    return [1, 2, 3].map((tier) => ({
+      group: `Tier ${tier}`,
+      items: catalog.data!.maps.filter((map) => map.tier === tier)
+        .map((map) => ({ value: map.id, label: map.name })),
+    })).concat({
+      group: "Dungeons and special areas",
+      items: catalog.data.maps.filter((map) => map.tier == null)
+        .map((map) => ({ value: map.id, label: map.name })),
+    }).filter((group) => group.items.length > 0);
+  }, [catalog.data]);
 
   return <Card withBorder padding="md" radius="md">
     <Stack gap="sm">
@@ -72,7 +84,7 @@ export function DamageTargetSection({ profile }: { profile: DamageProfile }) {
               data={monsterOptions} value={monsterId} onChange={(id) => { setMonsterId(id); setConditions((previous) => ({ ...previous, protected: false, immunityAura: false })); }} /> :
               <Select label="Map or dungeon area" description="Hell difficulty · unmodified spawn pool"
                 placeholder="Search maps" searchable clearable nothingFoundMessage="No matching map"
-                data={catalog.data?.maps.map((map) => ({ value: map.id, label: map.name })) || []}
+                data={mapOptions}
                 value={mapId} onChange={setMapId} />}
             {mode === "monster" && <Select label="Difficulty" value={difficulty}
               data={[{ value: "normal", label: "Normal" }, { value: "nightmare", label: "Nightmare" }, { value: "hell", label: "Hell" }]}
@@ -98,7 +110,11 @@ export function DamageTargetSection({ profile }: { profile: DamageProfile }) {
               <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }}>
                 {DAMAGE_ELEMENTS.map((element) => <div key={element}>
                   <Text size="xs" c="dimmed">{title(element)} resistance</Text>
-                  <Text fw={600}>{selectedStats?.resistances[element]}% → {results[0].result.resistances[element]}%</Text>
+                  <Text fw={600}>{selectedStats?.resistances[element]}% → {element === "physical" &&
+                    results[0].result.physicalResistanceRange?.min !== results[0].result.physicalResistanceRange?.max
+                    ? `${results[0].result.physicalResistanceRange?.min}%–${results[0].result.physicalResistanceRange?.max}% by strike`
+                    : `${element === "physical" && results[0].result.physicalResistanceRange
+                      ? results[0].result.physicalResistanceRange.min : results[0].result.resistances[element]}%`}</Text>
                   {results[0].result.resistances[element] >= 100 && <Badge color="red" size="xs">Immune</Badge>}
                   <Text size="sm">{range(total.byElement[element])} damage</Text>
                 </div>)}
@@ -130,7 +146,8 @@ export function DamageTargetSection({ profile }: { profile: DamageProfile }) {
                 <NumberInput label="Conviction level" min={0} max={99} allowDecimal={false} value={convictionLevel}
                   description="Includes equipped / mercenary aura" onChange={(value) => setConvictionOverride(Number(value) || 0)} />
                 {([ ["lowerResist", "Lower Resist (%)"], ["amplifyDamage", "Amplify Damage (%)"], ["battleCry", "Battle Cry (%)"],
-                  ["decrepify", "Decrepify (%)"], ["sanctuary", "Sanctuary (%)"], ["staticField", "Static Field debuff (%)"], ["inferno", "Inferno debuff (%)"] ] as const).map(([key, label]) =>
+                  ["decrepify", "Decrepify (%)"], ["sanctuary", "Sanctuary (%)"], ["staticField", "Static Field debuff (%)"], ["inferno", "Inferno debuff (%)"],
+                  ["arcticBlast", "Arctic Blast debuff (%)"], ["plaguePoppy", "Plague Poppy debuff (%)"] ] as const).map(([key, label]) =>
                   <NumberInput key={key} label={label} min={0} max={200} allowDecimal={false} value={conditions[key]}
                     onChange={(value) => setConditions((previous) => ({ ...previous, [key]: Number(value) || 0 }))} />)}
               </SimpleGrid>

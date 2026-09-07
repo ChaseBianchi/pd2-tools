@@ -1259,6 +1259,28 @@ function getGamePassiveStatValue(
   return total;
 }
 
+function getGlobalPlayerPassiveStatValue(
+  statName: string,
+  skillMap: Map<string, SkillEntry>,
+  weaponSelection?: WeaponSelection
+): number {
+  let total = 0;
+
+  skillMap.forEach((entry, skillName) => {
+    const skillRow = getGameRow("Skills", skillName);
+    if (entry.level <= 0 || !skillRow || getGameRowString("Skills", skillRow, "summon")) {
+      return;
+    }
+    if (statName === "passive_phys_pierce" &&
+        (!weaponSelection || !passiveStrikeSkillAppliesToWeapon(skillName, skillRow, weaponSelection))) {
+      return;
+    }
+    total += getGameSkillPassiveStatValue(skillName, [statName], skillMap) || 0;
+  });
+
+  return total;
+}
+
 const SUPPORTED_AURA_DAMAGE_STATS = new Set([
   "damagepercent",
   "firemindam",
@@ -3678,7 +3700,7 @@ function collectAlwaysActiveAuras(
 ): AuraSource[] {
   const auras: AuraSource[] = [];
 
-  playerItems.forEach((item) => {
+  playerItems.filter(isEquippedItem).forEach((item) => {
     item.properties.forEach((property) => {
       if (!property) {
         return;
@@ -3723,6 +3745,7 @@ function summarizeAuraSource(source: AuraSource): ActiveAuraSummary {
   return {
     name: source.name,
     level: source.level,
+    baseLevel: source.baseLevel,
     source: source.source,
     carrier: source.carrier,
   };
@@ -8427,7 +8450,7 @@ export function calculateDamage(
       );
     })
   );
-  const targetStatsBySet = new Map<WeaponSet, { stats: Record<string, number>; convictionLevel: number }>();
+  const targetStatsBySet = new Map<WeaponSet, { activeItems: IItem[]; convictionLevel: number }>();
   for (const profile of profiles) {
     const weapon = weaponSelections.find((selection) => selection.option.id === profile.weaponId)!;
     const context = contexts[weapon.weaponSet];
@@ -8437,25 +8460,60 @@ export function calculateDamage(
       // This context already contains only the selected weapon set; its slot
       // names retain "Switch" until attribute/skill normalization.
       const activeItems = context.playerItems.filter((item) => isEquippedItem(item) || isActiveInventoryCharm(item));
-      const stats = activeItems.reduce<Record<string, number>>((total, item) => {
-        for (const [stat, value] of Object.entries(expandItemStats(item))) total[stat] = (total[stat] || 0) + value;
-        return total;
-      }, {});
       const convictionLevels = [...activeItems, ...(characterData.mercenary?.items || [])]
         .flatMap((item) => item.properties.map((property) => property ? parseAuraProperty(property) : null))
         .filter((aura) => aura?.name === "Conviction").map((aura) => aura!.level);
-      targetStats = { stats, convictionLevel: Math.max(0, ...convictionLevels) };
+      targetStats = { activeItems, convictionLevel: Math.max(0, ...convictionLevels) };
       targetStatsBySet.set(weapon.weaponSet, targetStats);
     }
-    const { stats } = targetStats;
-    const resistancePierce: Partial<Record<DamageElement, number>> = {};
-    for (const [element, code] of Object.entries({ physical: "phys", fire: "fire", cold: "cold", lightning: "ltng", poison: "pois", magic: "mag" })) {
+    const selectedSkillName = profile.sourceSkillName || profile.skillName;
+    const excludesInheritedPierce = /Sentry$/.test(selectedSkillName) ||
+      /^(?:Wake of Fire|Wake of Inferno|Hydra|Lesser Hydra|Fire ?Golem)$/.test(selectedSkillName);
+    const isPetProfile = profile.skillDamageMode === "summon" || excludesInheritedPierce;
+    const itemPierce = (element: DamageElement, selection: WeaponSelection) =>
+      targetStats!.activeItems.reduce((total, item) => {
+        if (element === "physical") {
+          if (profile.skillDamageMode === "weapon" && item.category === "weapon" &&
+              (item.hash || String(item.id)) !== (selection.item.hash || String(selection.item.id))) return total;
+        }
+        const code = { physical: "phys", fire: "fire", cold: "cold", lightning: "ltng", poison: "pois", magic: "mag" }[element];
+        const stats = expandItemStats(item);
+        return total + (stats[`passive_${code}_pierce`] || 0) + (stats[`item_pierce_${code}`] || 0);
+      }, 0);
+    const resolvePierce = (element: DamageElement, selection = weapon) => {
+      const code = { physical: "phys", fire: "fire", cold: "cold", lightning: "ltng", poison: "pois", magic: "mag" }[element];
       const stat = `passive_${code}_pierce`;
-      resistancePierce[element as DamageElement] = (stats[stat] || 0) + (stats[`item_pierce_${code}`] || 0) + getGamePassiveStatValue(stat, skillMap);
+      const rawInherited = itemPierce(element, selection) + getGlobalPlayerPassiveStatValue(
+        stat, skillMap,
+        profile.skillDamageMode === "weapon" || selectedSkillName === "Blade Sentinel" ? selection : undefined
+      );
+      if (selectedSkillName === "Blade Sentinel" && element === "physical") {
+        return Math.floor(rawInherited / 2);
+      }
+      const inherited = excludesInheritedPierce ? 0 : profile.skillDamageMode === "summon"
+        ? element === "physical" ? 0 : Math.floor(rawInherited / 2)
+        : rawInherited;
+      const localPierce = isPetProfile
+        ? getGameSkillPassiveStatValue(selectedSkillName, [stat], skillMap) || 0
+        : getGameSkillAuraStatValue(selectedSkillName, [stat], skillMap) || 0;
+      return inherited + localPierce;
+    };
+    const resistancePierce: Partial<Record<DamageElement, number>> = {};
+    for (const element of ["physical", "fire", "cold", "lightning", "poison", "magic"] as DamageElement[]) {
+      resistancePierce[element] = resolvePierce(element);
     }
+    profile.strikeBreakdowns.forEach((strike) => {
+      const sequenceIndex = Number(strike.id.match(/^sequence:(\d+):/)?.[1] || 0) - 1;
+      const strikeWeaponId = sequenceIndex >= 0 ? profile.sequenceHits?.[sequenceIndex]?.weaponId : profile.weaponId;
+      const strikeWeapon = weaponSelections.find((selection) => selection.option.id === strikeWeaponId) || weapon;
+      strike.resistancePierce = resolvePierce("physical", strikeWeapon);
+    });
+    const selectedConvictionLevel = Math.max(0, ...profile.activeAuras
+      .filter((aura) => aura.name === "Conviction")
+      .map((aura) => aura.level));
     profile.targetModifiers = {
       resistancePierce,
-      convictionLevel: targetStats.convictionLevel,
+      convictionLevel: Math.max(targetStats.convictionLevel, selectedConvictionLevel),
     };
   }
   const defaultProfile = getDefaultDamageProfile(profiles);

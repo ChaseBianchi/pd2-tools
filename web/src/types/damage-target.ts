@@ -32,6 +32,7 @@ export interface MonsterTarget {
 export interface MapTarget {
   id: string;
   name: string;
+  tier: 1 | 2 | 3 | null;
   monsterIds: string[];
   bossIds: string[];
   notes: string[];

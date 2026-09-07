@@ -79,6 +79,100 @@ describe("independent damage mechanics", () => {
     data.items[0].properties = ["Level 12 Conviction Aura When Equipped"];
     expect(baseProfile(data).targetModifiers?.convictionLevel).toBe(12);
   });
+  it("uses the strongest active Conviction source for target resistance", () => {
+    const data = character("Conviction", 12, 12);
+    data.character.class = { id: 3, name: "Paladin" };
+    data.items[0].properties = ["Level 10 Conviction Aura When Equipped"];
+    const profile = calculateDamage(data).profiles.find((entry) =>
+      entry.skillId === "Basic Attack" && entry.playerAuraId === "Conviction" &&
+      entry.playerAuraCarrier === "self" && entry.playerAuraLevel === 12
+    );
+    expect(profile?.targetModifiers?.convictionLevel).toBe(12);
+  });
+
+  it("ignores stored aura-on-equip items", () => {
+    const data = character();
+    const armor = {
+      ...weapon("armor", "Body Armor"), category: "armor",
+      location: { zone: "Stored", storage: "Stash", equipment: "Body Armor" } as IItem["location"],
+      properties: ["Level 20 Holy Fire Aura When Equipped"],
+    } as IItem;
+    data.items.push(armor);
+    expect(calculateDamage(data).alwaysActiveAuras.some((aura) => aura.name === "Holy Fire")).toBe(false);
+    armor.location = { zone: "Equipped", equipment: "Body Armor" } as IItem["location"];
+    expect(calculateDamage(data).alwaysActiveAuras.some((aura) => aura.name === "Holy Fire")).toBe(true);
+  });
+
+  it("keeps local physical pierce on the striking weapon", () => {
+    const data = character();
+    data.items[0].modifiers = [{ name: "passive_phys_pierce", values: [10] }] as IItem["modifiers"];
+    const left = weapon("left", "Left Hand");
+    left.modifiers = [{ name: "passive_phys_pierce", values: [30] }] as IItem["modifiers"];
+    data.items.push(left);
+    const profiles = calculateDamage(data).profiles.filter((profile) =>
+      profile.skillId === "Basic Attack" && profile.playerAuraId === "none"
+    );
+    const right = profiles.find((profile) => profile.weaponId.startsWith("primary:right:"))!;
+    const leftHit = profiles.find((profile) => profile.weaponId.startsWith("primary:left:"))!;
+    expect(right.targetModifiers?.resistancePierce.physical).toBe(10);
+    expect(right.strikeBreakdowns[0].resistancePierce).toBe(10);
+    expect(leftHit.targetModifiers?.resistancePierce.physical).toBe(30);
+    expect(leftHit.strikeBreakdowns[0].resistancePierce).toBe(30);
+  });
+
+  it("keeps both weapon affixes global for non-attack skills", () => {
+    const data = character("Mind Blast", 20, 20);
+    data.items[0].modifiers = [{ name: "passive_phys_pierce", values: [10] }] as IItem["modifiers"];
+    const left = weapon("left", "Left Hand");
+    left.modifiers = [{ name: "passive_phys_pierce", values: [30] }] as IItem["modifiers"];
+    data.items.push(left);
+    expect(baseProfile(data, "Mind Blast").targetModifiers?.resistancePierce.physical).toBe(40);
+  });
+
+  it("applies Penetrate only to compatible weapons", () => {
+    const data = character("Penetrate", 20, 20);
+    data.character.class = { id: 0, name: "Amazon" };
+    expect(baseProfile(data).targetModifiers?.resistancePierce.physical).toBe(0);
+    data.items = [weapon("spear", "Right Hand", "spea")];
+    expect(baseProfile(data).targetModifiers?.resistancePierce.physical).toBe(10);
+  });
+
+  it("keeps native summon pierce local and excludes removed pet inheritance", () => {
+    const valkyrie = character("Valkyrie", 20, 20);
+    valkyrie.character.class = { id: 0, name: "Amazon" };
+    valkyrie.realSkills!.push({ skill: "Pierce", level: 20, baseLevel: 20 });
+    expect(baseProfile(valkyrie).targetModifiers?.resistancePierce.lightning).toBe(0);
+    const valkyrieProfile = calculateDamage(valkyrie).profiles.find((entry) =>
+      entry.skillId.startsWith("Valkyrie") && entry.playerAuraId === "none"
+    );
+    expect(valkyrieProfile?.targetModifiers?.resistancePierce.lightning).toBe(40);
+
+    for (const skill of ["Hydra", "Lightning Sentry", "FireGolem"] as const) {
+      const data = character(skill, 20, 20);
+      data.realSkills!.push({ skill: "Fire Mastery", level: 20, baseLevel: 20 });
+      data.items[0].modifiers = [{ name: "passive_fire_pierce", values: [10] }] as IItem["modifiers"];
+      const profile = calculateDamage(data).profiles.find((entry) =>
+        (entry.skillId === skill || entry.skillId.startsWith(`${skill}::`)) && entry.playerAuraId === "none"
+      );
+      expect(profile?.targetModifiers?.resistancePierce.fire).toBe(0);
+    }
+
+    const mage = character("Raise Skeletal Mage", 20, 20);
+    mage.realSkills!.push({ skill: "Fire Mastery", level: 20, baseLevel: 20 });
+    mage.items[0].modifiers = [{ name: "passive_fire_pierce", values: [10] }] as IItem["modifiers"];
+    const mageProfile = calculateDamage(mage).profiles.find((entry) =>
+      entry.skillId === "Raise Skeletal Mage::fire-mage" && entry.playerAuraId === "none"
+    );
+    const playerPierce = baseProfile(mage).targetModifiers?.resistancePierce.fire || 0;
+    expect(mageProfile?.targetModifiers?.resistancePierce.fire).toBe(Math.floor(playerPierce / 2));
+  });
+
+  it("applies selected-skill pierce only to Berserk", () => {
+    const data = character("Berserk", 20, 20);
+    data.character.class = { id: 4, name: "Barbarian" };
+    expect(baseProfile(data).targetModifiers?.resistancePierce.physical).toBe(0);
+    expect(baseProfile(data, "Berserk").targetModifiers?.resistancePierce.physical).toBe(24);
+  });
   it("includes intrinsic blunt undead damage and level-scaled enemy bonuses", () => {
     const data = character();
     data.items = [weapon("mace", "Right Hand", "mace")];
@@ -340,6 +434,19 @@ describe("independent damage mechanics", () => {
       entry.playerAuraCarrier === "self" && entry.playerAuraLevel === 15
     );
     expect(profile?.skillLevel).toBe(11);
+  });
+
+  it("preserves Battle Command hard points while exporting passive pierce", () => {
+    const data = character("Cold Mastery", 20, 20);
+    data.items[0].name = "Call to Arms";
+    data.items[0].properties.push("+15 to Battle Command");
+    const profile = calculateDamage(data).profiles.find((entry) =>
+      entry.skillId === "Basic Attack" && entry.playerAuraId === "Battle Command" &&
+      entry.playerAuraCarrier === "self" && entry.playerAuraLevel === 15
+    );
+    // Battle Command 15 with no allocated points grants +1 all skills:
+    // Cold Mastery 21 = 5 + 20 = 25 pierce.
+    expect(profile?.targetModifiers?.resistancePierce.cold).toBe(25);
   });
 
   it("keeps editable aura levels consistent with owned synergies and the weapon set", () => {

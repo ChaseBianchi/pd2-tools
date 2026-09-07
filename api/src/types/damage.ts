@@ -65,6 +65,7 @@ export interface DamageStrikeBreakdown {
   maxDeadlyStrikeChance: number;
   effectiveDeadlyStrikeChance: number;
   deadlyStrikeMultiplier: number;
+  resistancePierce?: number;
 }
 
 export interface DamageComponent {
@@ -170,6 +171,7 @@ export interface DamageTransformationOption {
 export interface ActiveAuraSummary {
   name: string;
   level: number;
+  baseLevel?: number;
   source:
     | "player_skill"
     | "player_item"

@@ -40,7 +40,7 @@ jobs:
 
       - name: Calculator TypeScript check
         working-directory: ./web
-        run: npx tsc -b tsconfig.damage.json
+        run: npx tsc --noEmit
 
       - name: Lint
         working-directory: ./web

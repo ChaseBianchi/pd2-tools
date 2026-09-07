@@ -166,8 +166,10 @@ export function getDamageTargetCatalog(): DamageTargetCatalog {
         .map(([, value]) => canonicalIds.get(value.toLowerCase()) || value))];
       const missing = ids.filter((id) => !byId.has(id));
       if (missing.length) throw new Error(`Unresolved map spawn references in ${row.Name}: ${missing.join(", ")}`);
+      const areaLevel = Number(row.MonLvl3Ex);
       return {
         id: row.Id, name: name(row.LevelName),
+        tier: areaLevel >= 87 && areaLevel <= 89 ? (areaLevel - 86) as 1 | 2 | 3 : null,
         monsterIds: ids.filter((id) => byId.get(id)!.kind !== "boss"),
         bossIds: ids.filter((id) => byId.get(id)!.kind === "boss"),
         notes: ["Equal weight per distinct monster type in the Hell spawn pool. This is not a prediction of spawn frequencies or clear speed. Bosses, random affixes, map events, summoned reinforcements, and map rolls are excluded from the average."],
