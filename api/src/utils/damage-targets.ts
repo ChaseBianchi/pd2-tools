@@ -16,6 +16,15 @@ const SUFFIXES: Record<TargetDifficulty, string> = {
   normal: "", nightmare: "(N)", hell: "(H)",
 };
 type Row = Record<string, string>;
+// Destructible scenery and generic engine traps are not monster encounters.
+// Keep combat constructs such as Flying Scimitars and map Fire Towers.
+const SCENERY_BASE_IDS = new Set([
+  "trap-melee", "turret1", "boneprison1", "boneprison2", "boneprison3", "boneprison4", "barricadewall1", "barricadedoor1",
+  "barricadetower", "catapult1", "prisondoor",
+]);
+// Reviewed season-13 leftovers: untranslated/unplaced Cantor prototype, Radament
+// test boss, and the old world-event clone superseded by uberdiablonew.
+const UNUSED_TARGET_IDS = new Set(["cantorboss", "DungeonTest3", "diabloclone"]);
 
 export function readTargetTable(name: string): Row[] {
   const [header, ...lines] = fs.readFileSync(path.join(DATA, `${name}.txt`), "utf8")
@@ -107,13 +116,22 @@ let catalog: DamageTargetCatalog | undefined;
 export function getDamageTargetCatalog(): DamageTargetCatalog {
   if (catalog) return catalog;
   const rows = readTargetTable("MonStats");
+  const extended = new Map(readTargetTable("MonStats2").map((row) => [row.Id, row]));
   const levels = readTargetTable("Levels");
   const properties = new Map(readTargetTable("MonProp").map((row) => [row.Id, row]));
   const skills = new Map(readTargetTable("Skills").map((row) => [Number(row.Id), row]));
   const names: Record<string, string> = JSON.parse(fs.readFileSync(path.join(DATA, "MonsterNames.json"), "utf8"));
   const name = (key: string) => names[key] || key;
   const monsters: MonsterTarget[] = rows
-    .filter((row) => row.enabled === "1" && row.killable === "1" && row.npc !== "1" && Number(row.Align || 0) === 0)
+    .filter((row) => {
+      const flags = extended.get(row.MonStatsEx);
+      // Enabled/killable also describes invisible spawners and unused placeholders.
+      // Do not reject inert rows: attackable nests and The Tainted Hive use that flag.
+      return row.enabled === "1" && row.killable === "1" && row.npc !== "1" && Number(row.Align || 0) === 0
+        && name(row.NameStr).trim() && flags?.isAtt === "1" && flags.isSel === "1"
+        && ["maxHP", "MaxHP(N)", "MaxHP(H)"].some((column) => Number(row[column]) > 0)
+        && !SCENERY_BASE_IDS.has(row.BaseId) && !UNUSED_TARGET_IDS.has(row.Id);
+    })
     .map((row) => ({
       id: row.Id, monsterId: row.Id, name: name(row.NameStr),
       kind: row.boss === "1" ? "boss" : "monster",
@@ -129,14 +147,20 @@ export function getDamageTargetCatalog(): DamageTargetCatalog {
   const canonicalIds = new Map(monsters.map((monster) => [monster.id.toLowerCase(), monster.id]));
   // Distinct rows often share a localized name (campaign/map/uber versions).
   const overrides: Record<string, string> = {
-    diabloclone: "Diablo Clone (legacy)", uberdiablonew: "Diablo Clone",
+    uberdiablonew: "Diablo Clone",
     uberbaal: "Uber Baal", baalclone: "Baal Clone", baalcrab: "Baal",
     mephistoMap: "Mephisto (map)", diabloMap: "Diablo (map)", baalcrabMap: "Baal (map)",
     andarielMap: "Andariel (map)", durielMap: "Duriel (map)",
     rathmaBoneClone: "Rathma (clone)", rathmaPoisonClone: "Mendeln (clone)",
+    lernaeanhydra2: "Ancient Cistern Hydra (boss)", lernaeanhydra1: "Ancient Cistern Hydra (minion)",
+    uberancientbarb1: "Uber Talic", uberancientbarb2: "Uber Madawc", uberancientbarb3: "Uber Korlic",
+    GuardianOfFateClone: "Guardian of Fate (clone)",
   };
   for (const monster of monsters) if (overrides[monster.id]) monster.name = overrides[monster.id];
   for (const row of readTargetTable("SuperUniques")) {
+    // MonPreset.txt places willowispboss directly. The unused Wisp Boss unique
+    // definition would incorrectly add Stone Skin / Magic Resistant to Canight.
+    if (row.Superunique === "Wisp Boss") continue;
     const base = byId.get(canonicalIds.get(row.Class.toLowerCase()) || row.Class);
     if (!base) continue;
     const modifiers = [1, 2, 3].map((i) => Number(row[`Mod${i}`] || 0)).filter(Boolean);
@@ -160,6 +184,34 @@ export function getDamageTargetCatalog(): DamageTargetCatalog {
       }
     }
   }
+  // A damage target represents a named defensive profile, not an internal spawn ID.
+  // Match every difficulty, creature type, fixed modifier, and encounter note; equal
+  // Hell resistances alone do not make two targets interchangeable.
+  const profiles = new Map<string, MonsterTarget>();
+  byId.clear();
+  for (const target of monsters) {
+    const key = JSON.stringify([target.name, target.kind, target.creatureType, target.difficulties, target.fixedModifiers, target.notes]);
+    const existing = profiles.get(key);
+    if (existing) {
+      existing.areas = [...new Set([...existing.areas, ...target.areas])];
+      canonicalIds.set(target.id.toLowerCase(), existing.id);
+    } else {
+      profiles.set(key, target);
+      byId.set(target.id, target);
+    }
+  }
+  // These quest monsters are the named encounter, not a separate ordinary species.
+  // Keep the SuperUniques entry (including its fixed modifiers) and its area links.
+  const questTemplates = new Set([
+    "griswold", "radament", "summoner", "smith", "hephasto", "nihlathakboss",
+    "ancientbarb1", "ancientbarb2", "ancientbarb3",
+  ]);
+  for (const target of monsters.filter((entry) => entry.kind === "superunique" && questTemplates.has(entry.monsterId))) {
+    const baseId = canonicalIds.get(target.monsterId.toLowerCase())!;
+    target.areas = [...new Set([...target.areas, ...byId.get(baseId)!.areas])];
+    byId.delete(baseId);
+    for (const [alias, id] of canonicalIds) if (id === baseId) canonicalIds.set(alias, target.id);
+  }
   const maps = levels.filter((row) => Number(row.Id) >= 138 && Number(row.NumMon) > 0 && !/pvp|BR Arena/i.test(row.Name))
     .map((row) => {
       const ids = [...new Set(Object.entries(row).filter(([key, value]) => /^nmon\d+$/.test(key) && value)
@@ -175,8 +227,8 @@ export function getDamageTargetCatalog(): DamageTargetCatalog {
         notes: ["Equal weight per distinct monster type in the Hell spawn pool. This is not a prediction of spawn frequencies or clear speed. Bosses, random affixes, map events, summoned reinforcements, and map rolls are excluded from the average."],
       };
     }).filter((map) => map.monsterIds.length > 0);
-  monsters.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  const targets = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   maps.sort((a, b) => a.name.localeCompare(b.name));
-  catalog = { season: 13, monsters, maps };
+  catalog = { season: 13, monsters: targets, maps };
   return catalog;
 }

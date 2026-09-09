@@ -31,7 +31,7 @@ foreach ($archive in @('d2data.mpq', 'd2exp.mpq', 'ProjectD2\pd2data.mpq')) {
         $paths = if ($archive -eq 'd2data.mpq') { @('data\local\lng\eng\string.tbl') }
             elseif ($archive -eq 'd2exp.mpq') { @('data\local\lng\eng\expansionstring.tbl') }
             else {
-                @('MonStats', 'MonProp', 'SuperUniques', 'Levels') | ForEach-Object { 'data\global\excel\' + $_ + '.txt' }
+                @('MonStats', 'MonStats2', 'MonPreset', 'MonProp', 'SuperUniques', 'Levels') | ForEach-Object { 'data\global\excel\' + $_ + '.txt' }
                 'data\global\excel\MonStats.bin'
                 'data\local\lng\eng\patchstring.tbl'
             }
@@ -49,7 +49,7 @@ foreach ($archive in @('d2data.mpq', 'd2exp.mpq', 'ProjectD2\pd2data.mpq')) {
         }
     } finally { [void][DamageTargetMpq]::SFileCloseArchive($handle) }
 }
-foreach ($required in @('MonStats.txt', 'MonStats.bin', 'MonProp.txt', 'SuperUniques.txt', 'Levels.txt', 'string.tbl', 'expansionstring.tbl', 'patchstring.tbl')) {
+foreach ($required in @('MonStats.txt', 'MonStats2.txt', 'MonPreset.txt', 'MonStats.bin', 'MonProp.txt', 'SuperUniques.txt', 'Levels.txt', 'string.tbl', 'expansionstring.tbl', 'patchstring.tbl')) {
     if (!$taskFiles.ContainsKey($required)) { throw "Missing $required" }
 }
 foreach ($name in $taskFiles.Keys) {

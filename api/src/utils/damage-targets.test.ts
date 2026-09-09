@@ -9,16 +9,75 @@ const zero: TargetResistances = { physical: 0, magic: 0, fire: 0, cold: 0, light
 const monster = (id: string) => catalog.monsters.find((target) => target.id === id)!;
 
 describe("source-backed target catalog", () => {
-  it("includes every enabled, killable hostile monster row without conflating variants", () => {
-    const expected = readTargetTable("MonStats").filter((row) => row.enabled === "1" && row.killable === "1" && row.npc !== "1" && Number(row.Align || 0) === 0);
-    expect(catalog.monsters.filter((target) => target.kind !== "superunique").map((target) => target.id).sort())
-      .toEqual(expected.map((row) => row.Id).sort());
+  it("keeps distinct campaign, map, and encounter variants", () => {
     expect(new Set(catalog.monsters.map((target) => target.id)).size).toBe(catalog.monsters.length);
     expect(monster("mephisto")).toBeDefined();
     expect(monster("ubermephisto")).toBeDefined();
     expect(monster("mephistoMap")).toBeDefined();
     expect(monster("Lucion")).toBeDefined();
     expect(monster("NaKrulBoss")).toBeDefined();
+  });
+  it("excludes unnamed objects, unattackable helpers, and zero-life unused rows", () => {
+    for (const id of ["window1", "window2", "larva", "quillbear1", "quillbear5", "evilhole1", "minispider", "demonhole", "monhydra1", "monhydra2", "monhydra3", "minionspawner1", "minionspawner8", "DemonPortal", "demonspawner"]) {
+      expect(monster(id)).toBeUndefined();
+    }
+    expect(catalog.monsters.every((target) => target.name.trim())).toBe(true);
+    // Inert does not mean unattackable: nests and this map boss are valid targets.
+    expect(monster("crownest1")).toBeDefined();
+    expect(monster("KyovoshadBoss")).toBeDefined();
+    expect(monster("targetdummy")).toBeDefined();
+  });
+  it("excludes scenery while retaining combat constructs in map pools", () => {
+    for (const id of ["trap-melee", "turret1", "turret2", "turret3", "boneprison1", "boneprison2", "boneprison3", "boneprison4", "barricadewall1", "barricadewall2", "barricadedoor1", "barricadedoor2", "barricadetower", "catapult1", "catapult4", "prisondoor"]) {
+      expect(monster(id)).toBeUndefined();
+    }
+    expect(monster("firetowerMarket")).toBeDefined();
+    expect(monster("flyingscimitarMarket")).toBeDefined();
+  });
+  it("does not apply an unused superunique template to the directly placed Canight boss", () => {
+    const placements = readTargetTable("MonPreset").map((row) => row.Place);
+    expect(placements).toContain("willowispboss");
+    expect(placements).not.toContain("Wisp Boss");
+    expect(catalog.monsters.filter((target) => target.name === "Canight The Corrupted").map((target) => target.id)).toEqual(["willowispboss"]);
+    expect(monster("willowispboss").fixedModifiers).toEqual([]);
+  });
+  it("excludes reviewed test and legacy definitions while keeping their live encounters", () => {
+    for (const id of ["cantorboss", "DungeonTest3", "diabloclone"]) expect(monster(id)).toBeUndefined();
+    expect(catalog.monsters.filter((target) => target.name === "Radament").map((target) => target.id)).toEqual(["superunique:Radament"]);
+    expect(monster("uberdiablonew").name).toBe("Diablo Clone");
+  });
+  it("consolidates equivalent defensive profiles without conflating different defenses", () => {
+    expect(monster("baalminion1")).toBeDefined();
+    expect(monster("baalminion2")).toBeUndefined();
+    expect(monster("baalminion3")).toBeUndefined();
+    expect(catalog.monsters.filter((target) => target.name === "Abhorrent")).toHaveLength(1);
+    const profiles = catalog.monsters.map(({ name, kind, creatureType, difficulties, fixedModifiers, notes }) =>
+      JSON.stringify([name, kind, creatureType, difficulties, fixedModifiers, notes]));
+    expect(new Set(profiles).size).toBe(profiles.length);
+    expect(monster("mephisto").difficulties).not.toEqual(monster("ubermephisto").difficulties);
+    expect(monster("mColdNihlMinion").difficulties.hell).toEqual(monster("mFireNihlMinion").difficulties.hell);
+    expect(monster("mColdNihlMinion").difficulties.normal).not.toEqual(monster("mFireNihlMinion").difficulties.normal);
+  });
+  it("shows the actual named encounter instead of its unmodified quest template", () => {
+    for (const name of ["The Smith", "The Summoner", "Griswold", "Hephasto The Armorer", "Nihlathak", "Talic", "Madawc", "Korlic"]) {
+      const targets = catalog.monsters.filter((target) => target.name === name);
+      expect(targets).toHaveLength(1);
+      expect(targets[0].kind).toBe("superunique");
+    }
+    // Hephasto's fixed Spectral Hit raises 25 cold to 45; 75 fire stays capped.
+    expect(monster("superunique:The Feature Creep").difficulties.hell.resistances.cold).toBe(45);
+    expect(monster("superunique:The Feature Creep").difficulties.hell.resistances.fire).toBe(75);
+    expect(monster("fallenshaman1")).toBeDefined(); // ordinary species used by Bishibosh
+  });
+  it("distinguishes the Cistern boss from its minion despite their equal resistances", () => {
+    const boss = monster("lernaeanhydra2");
+    const minion = monster("lernaeanhydra1");
+    expect(boss.name).toBe("Ancient Cistern Hydra (boss)");
+    expect(minion.name).toBe("Ancient Cistern Hydra (minion)");
+    expect(boss.difficulties.hell.resistances).toEqual(minion.difficulties.hell.resistances);
+    expect(boss.difficulties.hell.block).toBe(27);
+    expect(minion.difficulties.hell.block).toBe(24);
+    expect(readTargetTable("MonStats").find((row) => row.Id === boss.id)?.minion1).toBe(minion.id);
   });
   it("uses independent literal Mephisto difficulty resistances", () => {
     expect(monster("mephisto").difficulties.normal.resistances).toEqual({ physical: 0, magic: 0, fire: 33, cold: 25, lightning: 33, poison: 50 });
@@ -66,6 +125,10 @@ describe("source-backed target catalog", () => {
     expect(road.monsterIds).toEqual(["wraith3DemonRoad", "goatman3DemonRoad", "skmage_fire1DemonRoad", "succubus4DemonRoad", "blunderbore2DemonRoad", "clawviper1DemonRoad", "unraveler1DemonRoad", "skeleton2DemonRoad"]);
     expect(catalog.maps.find((map) => map.id === "183")!.monsterIds).toHaveLength(6); // duplicate mosquito slot
     expect(catalog.maps.find((map) => map.id === "194")).toBeUndefined(); // no random spawns, despite stale nmon cells
+    const outerVoid = catalog.maps.find((map) => map.name === "The Outer Void")!;
+    expect(outerVoid.monsterIds).toEqual(["voidBeast", "voidWatcher", "voidFrog", "voidKnightCorridor", "voidling"]);
+    expect(monster("voidFrog").areas).toContain("The Outer Void");
+    expect(monster("superunique:Ancient Barbarian 1").areas).toContain("Arreat Summit");
   });
   it("assigns map tiers from Hell expansion area levels", () => {
     expect(catalog.maps.find((map) => map.id === "146")!.tier).toBe(1); // Ancestral Trial

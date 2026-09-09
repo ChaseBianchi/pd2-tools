@@ -20,8 +20,8 @@ export function DamageTargetSection({ profile }: { profile: DamageProfile }) {
   const [conditions, setConditions] = useState(EMPTY_TARGET_CONDITIONS);
   const [convictionOverride, setConvictionOverride] = useState<number | undefined>();
   const catalog = useQuery({
-    queryKey: ["damage-targets", 13, 2],
-    queryFn: () => apiClient.get<DamageTargetCatalog>("/damage-targets?model=2"),
+    queryKey: ["damage-targets", 13, 3],
+    queryFn: () => apiClient.get<DamageTargetCatalog>("/damage-targets?model=3"),
     enabled, staleTime: 60 * 60 * 1000, retry: false,
   });
   const monsters = useMemo(() => new Map(catalog.data?.monsters.map((monster) => [monster.id, monster])), [catalog.data]);
@@ -52,7 +52,7 @@ export function DamageTargetSection({ profile }: { profile: DamageProfile }) {
       items: catalog.data!.monsters.filter((monster) => monster.kind === kind).map((monster) => ({
         value: monster.id,
         label: (counts.get(monster.name) || 0) > 1
-          ? `${monster.name} · ${monster.areas[0] || monster.monsterId} [${monster.monsterId}]` : monster.name,
+          ? `${monster.name}${monster.areas[0] ? ` · ${monster.areas[0]}` : ""} [${monster.monsterId}]` : monster.name,
       })),
     }));
   }, [catalog.data]);
