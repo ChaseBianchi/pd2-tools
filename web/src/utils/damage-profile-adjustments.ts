@@ -49,25 +49,37 @@ export function rescalePhysicalComponents(
       return component;
     }
 
+    const componentPreviousMultiplier =
+      component.physicalBonusPercent === undefined
+        ? previousMultiplier
+        : 1 + component.physicalBonusPercent / 100;
+    const componentNextMultiplier = Number(
+      (
+        componentPreviousMultiplier +
+        nextMultiplier -
+        previousMultiplier
+      ).toFixed(10)
+    );
     const baseDamage = component.baseDamage || {
       min:
-        previousMultiplier === 0
+        componentPreviousMultiplier === 0
           ? component.damage.min
-          : component.damage.min / previousMultiplier,
+          : component.damage.min / componentPreviousMultiplier,
       max:
-        previousMultiplier === 0
+        componentPreviousMultiplier === 0
           ? component.damage.max
-          : component.damage.max / previousMultiplier,
+          : component.damage.max / componentPreviousMultiplier,
     };
 
     return {
       ...component,
       baseDamage,
+      physicalBonusPercent: (componentNextMultiplier - 1) * 100,
       damage: {
-        min: Math.floor(baseDamage.min * nextMultiplier),
+        min: Math.floor(baseDamage.min * componentNextMultiplier),
         max: Math.max(
-          Math.floor(baseDamage.min * nextMultiplier),
-          Math.floor(baseDamage.max * nextMultiplier)
+          Math.floor(baseDamage.min * componentNextMultiplier),
+          Math.floor(baseDamage.max * componentNextMultiplier)
         ),
       },
     };

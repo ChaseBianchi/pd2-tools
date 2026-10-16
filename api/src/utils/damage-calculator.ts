@@ -875,6 +875,7 @@ const SKILL_NAME_ALIASES: Record<string, string> = {
   "Blessed Shield": "Holy Shield",
   "Raise Skeleton": "Raise Skeleton Warrior",
   "Phoenix Strike": "Royal Strike",
+  "Poison Strike": "Poison Dagger",
   "Poison Creeper": "Plague Poppy",
   Lycanthropy: "Shape Shifting",
   "Carrion Vine": "Cycle of Life",
@@ -3797,14 +3798,64 @@ function collectPlayerAuraOptions(
     const partyLevelBonuses = levelOptions.map((level) =>
       getManualAuraLevelBonus(definition.id, level, "party")
     );
+    const automaticLevel = Math.max(
+      0,
+      ...Object.values(contexts).flatMap((context) =>
+        context.alwaysActiveAuras
+          .filter((aura) => aura.name === definition.name)
+          .map((aura) => aura.level)
+      )
+    );
     options.push({
       id: definition.id,
       name: definition.name,
-      level: ownedLevel || 1,
+      level: Math.max(ownedLevel, automaticLevel) || 1,
       defaultActive: ownedLevel > 0 && allocatedBuffIds.has(definition.id),
       levelOptions,
       levelBonuses: selfLevelBonuses,
       selfLevelBonuses,
+      selfLevelBonusesByWeaponSet:
+        ownedLevel > 0
+          ? {
+              primary: levelOptions.map((level) =>
+                getManualAuraLevelBonus(
+                  definition.id,
+                  level,
+                  "self",
+                  contexts.primary
+                )
+              ),
+              secondary: levelOptions.map((level) =>
+                getManualAuraLevelBonus(
+                  definition.id,
+                  level,
+                  "self",
+                  contexts.secondary
+                )
+              ),
+            }
+          : undefined,
+      summonLevelBonusesByWeaponSet:
+        ownedLevel > 0
+          ? {
+              primary: levelOptions.map((level) =>
+                getManualAuraLevelBonus(
+                  definition.id,
+                  level,
+                  "party",
+                  contexts.primary
+                )
+              ),
+              secondary: levelOptions.map((level) =>
+                getManualAuraLevelBonus(
+                  definition.id,
+                  level,
+                  "party",
+                  contexts.secondary
+                )
+              ),
+            }
+          : undefined,
       partyLevelBonuses,
       source: ownedLevel > 0 ? "character_skill" : "manual",
     });
@@ -3816,14 +3867,34 @@ function collectPlayerAuraOptions(
 function collectPlayerAuraSelections(
   playerAuraOptions: DamageAuraOption[]
 ): AuraSelection[] {
-  return playerAuraOptions.flatMap((option) =>
-    option.id === "none"
-      ? [{ option, carrier: "self" as const }]
-      : [
-          { option, carrier: "self" as const },
-          { option, carrier: "party" as const },
-        ]
-  );
+  return playerAuraOptions.flatMap((option) => {
+    if (option.id === "none") return [{ option, carrier: "self" as const }];
+    const levelsBySkillBonus = new Map<number, number>();
+    if (option.id === "Battle Command") {
+      // One profile per all-skills bonus tier; the UI adjusts physical ED within a tier.
+      levelsBySkillBonus.set(
+        getAuraSkillLevelBonus({
+          name: option.name,
+          level: option.level,
+          source: "manual",
+          carrier: "self",
+        }),
+        option.level
+      );
+      option.levelBonuses.forEach((bonus) => {
+        if (!levelsBySkillBonus.has(bonus.skillLevelBonus)) {
+          levelsBySkillBonus.set(bonus.skillLevelBonus, bonus.level);
+        }
+      });
+    }
+    const levels = levelsBySkillBonus.size
+      ? Array.from(levelsBySkillBonus.values())
+      : [option.level];
+    return levels.flatMap((level) => [
+      { option: { ...option, level }, carrier: "self" as const },
+      { option: { ...option, level }, carrier: "party" as const },
+    ]);
+  });
 }
 
 function isSelectableAttackSkill(skillName: string): boolean {
@@ -3837,6 +3908,7 @@ function isSelectableSpellSkill(skillName: string): boolean {
     ) || skillName;
   if (
     resolvedSkillName === "Holy Shield" ||
+    resolvedSkillName === "Holy Sword" ||
     isPlayerAuraSkill(resolvedSkillName) ||
     isGameSummonSkill(resolvedSkillName) ||
     isGameSelfOrPartyBuffSkill(resolvedSkillName)
@@ -6696,12 +6768,13 @@ function getAuraPulseProfileFields(
 function getManualAuraLevelBonus(
   auraName: string,
   level: number,
-  carrier: AuraCarrier
+  carrier: AuraCarrier,
+  context?: WeaponSetContext
 ): DamageAuraLevelBonus {
   const aura: AuraSource = {
     name: auraName,
     level,
-    source: "manual",
+    source: context ? "player_skill" : "manual",
     carrier,
   };
 
@@ -6709,11 +6782,20 @@ function getManualAuraLevelBonus(
     level,
     skillLevelBonus: getAuraSkillLevelBonus(aura),
     physicalBonusPercent: getAuraPhysicalDamagePercent(aura),
-    elementalDamage: getAuraAttackDamage(aura, new Map()),
-    poisonDamage: getAuraPoisonDamage(aura, new Map()),
+    elementalDamage: getAuraAttackDamage(
+      aura,
+      context?.skillMap || new Map(),
+      context?.realStats
+    ),
+    poisonDamage: getAuraPoisonDamage(
+      aura,
+      context?.skillMap || new Map(),
+      context?.realStats
+    ),
     strikeModifiers: getAuraStrikeModifiers(aura),
   };
 }
+
 
 function skillHasServerMissiles(skillRow: string[]): boolean {
   return SERVER_SKILL_MISSILE_COLUMNS.some((columnName) =>
@@ -7170,9 +7252,7 @@ function buildSummonProfile(
       ? undefined
       : getSummonAuraSource({
           name: playerAuraOption.name,
-          level:
-            getSkillEntry(skillMap, playerAuraOption.name).level ||
-            playerAuraOption.level,
+          level: playerAuraOption.level,
           source:
             playerAuraOption.source === "character_skill"
               ? ("player_skill" as const)
@@ -7222,10 +7302,13 @@ function buildSummonProfile(
     );
     const componentPhysicalBonusPercent =
       Math.max(0, summonDamagePercent - duplicateDirectPercent) + auraPercent;
-    return scalePhysicalDamageComponent(
-      component,
-      1 + componentPhysicalBonusPercent / 100
-    );
+    return {
+      ...scalePhysicalDamageComponent(
+        component,
+        1 + componentPhysicalBonusPercent / 100
+      ),
+      physicalBonusPercent: componentPhysicalBonusPercent,
+    };
   });
   const auraElementalComponents: DamageComponent[] = [];
   activeAuras.forEach((aura) => {
@@ -7380,9 +7463,7 @@ function buildSpellProfile(
       ? undefined
       : {
           name: playerAuraOption.name,
-          level:
-            getSkillEntry(skillMap, playerAuraOption.name).level ||
-            playerAuraOption.level,
+          level: playerAuraOption.level,
           source:
             playerAuraOption.source === "character_skill" &&
             playerAuraCarrier === "self"
@@ -7513,6 +7594,10 @@ function buildSequenceProfile(
   const damageComponents = hitProfiles.flatMap(({ hit, profile }, index) =>
     profile.damageComponents.map((component) => ({
       ...component,
+      physicalBonusPercent:
+        component.damageType === "physical"
+          ? profile.breakdown.physicalBonusPercent.total
+          : component.physicalBonusPercent,
       id: `sequence:${index + 1}:${component.id}`,
       label: `${hit.label}: ${component.label}`,
     }))
@@ -7673,9 +7758,7 @@ function buildProfile(
       ? undefined
       : {
           name: playerAuraOption.name,
-          level:
-            getSkillEntry(skillMap, playerAuraOption.name).level ||
-            playerAuraOption.level,
+          level: playerAuraOption.level,
           source:
             playerAuraOption.source === "character_skill" &&
             playerAuraCarrier === "self"

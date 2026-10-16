@@ -56,6 +56,55 @@ function createPhysicalComponent(
 }
 
 describe("damage profile strike adjustments", () => {
+  it("keeps independent weapon multipliers when changing a dual-wield aura", () => {
+    const components = [
+      {
+        ...createPhysicalComponent("right", 200, 400),
+        baseDamage: { min: 100, max: 200 },
+        physicalBonusPercent: 100,
+      },
+      {
+        ...createPhysicalComponent("left", 450, 900),
+        baseDamage: { min: 150, max: 300 },
+        physicalBonusPercent: 200,
+      },
+    ];
+    expect(
+      rescalePhysicalComponents(components, 2, 2).map(
+        (component) => component.damage
+      )
+    ).toEqual([
+      { min: 200, max: 400 },
+      { min: 450, max: 900 },
+    ]);
+    const buffed = rescalePhysicalComponents(components, 2, 3);
+    expect(buffed.map((component) => component.damage)).toEqual([
+      { min: 300, max: 600 },
+      { min: 600, max: 1200 },
+    ]);
+    expect(
+      rescalePhysicalComponents(buffed, 3, 2).map(
+        (component) => component.damage
+      )
+    ).toEqual(components.map((component) => component.damage));
+  });
+  it("does not reapply summon synergies when changing aura multipliers", () => {
+    const component: DamageComponent = {
+      ...createPhysicalComponent("archer", 200, 206),
+      source: "summon",
+      baseDamage: { min: 200, max: 206 },
+      physicalBonusPercent: 0,
+    };
+    expect(
+      rescalePhysicalComponents([component], 1.02, 1.02)[0].damage
+    ).toEqual({ min: 200, max: 206 });
+    const might = rescalePhysicalComponents([component], 1.02, 1.22)[0];
+    expect(might.damage).toEqual({ min: 240, max: 247 });
+    expect(rescalePhysicalComponents([might], 1.22, 1.02)[0].damage).toEqual({
+      min: 200,
+      max: 206,
+    });
+  });
   it("applies multiple strike aura deltas in sequence with caps and CS-first DS effectiveness", () => {
     const firstAura: DamageStrikeModifiers = {
       criticalChance: 20,

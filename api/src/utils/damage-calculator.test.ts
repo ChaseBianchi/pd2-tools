@@ -1302,6 +1302,176 @@ describeWithGameData("damage calculator component model", () => {
     ({ calculateDamage } = await import("./damage-calculator"));
   });
 
+  it("resolves live Poison Strike names for attack profiles and Poison Nova synergies", () => {
+    const character = createCharacter("Poison Nova", 20);
+    character.character.class = { id: 2, name: "Necromancer" };
+    character.character.skills = [
+      { id: 73, name: "Poison Strike", level: 20 },
+      { id: 83, name: "Desecrate", level: 20 },
+      { id: 92, name: "Poison Nova", level: 20 },
+    ];
+    character.realSkills = character.character.skills.map((skill) => ({
+      skill: skill.name,
+      level: skill.level,
+      baseLevel: skill.level,
+    }));
+    character.items[0].base = {
+      ...character.items[0].base,
+      id: "dgr",
+      type: "Knife",
+      type_code: "knif",
+    };
+    const calculation = calculateDamage(character);
+    const strike = calculation.profiles.find(
+      (profile) =>
+        profile.skillId === "Poison Strike" && profile.playerAuraId === "none"
+    );
+    expect(strike).toBeDefined();
+    expect(
+      strike.damageComponents.some((component) =>
+        component.sourceRefs.some((ref) => ref.row === "Poison Dagger")
+      )
+    ).toBe(true);
+    const nova = calculation.profiles.find(
+      (profile) =>
+        profile.skillId === "Poison Nova" && profile.playerAuraId === "none"
+    );
+    expect(nova.damageTotals.byElement.poison).toEqual({
+      min: 2463,
+      max: 2683,
+    });
+  });
+
+  it("does not present Holy Sword's buff fields as direct spell damage", () => {
+    const character = createCharacter("Holy Sword", 20);
+    character.character.class = { id: 3, name: "Paladin" };
+    const calculation = calculateDamage(character);
+    expect(
+      calculation.skillOptions.some((skill) => skill.id === "Holy Sword")
+    ).toBe(false);
+    expect(
+      calculation.profiles.some((profile) => profile.skillId === "Holy Sword")
+    ).toBe(false);
+  });
+
+  it("keeps requested aura levels consistent across weapon sets", () => {
+    const character = createCharacter("Heart of Wolverine", 20);
+    character.character.class = { id: 5, name: "Druid" };
+    character.items.push(
+      createWeapon({
+        id: "buff-swap",
+        hash: "buff-swap",
+        properties: ["+5 to All Skills"],
+        location: {
+          ...createWeapon().location,
+          equipment: "Right Hand Switch",
+        },
+      })
+    );
+    const calculation = calculateDamage(character);
+    const aura = calculation.playerAuraOptions.find(
+      (option) => option.id === "Heart of Wolverine"
+    );
+    expect(aura.level).toBe(25);
+    const primary = calculation.profiles.find(
+      (profile) =>
+        profile.skillId === "Basic Attack" &&
+        profile.weaponId.startsWith("primary:") &&
+        profile.playerAuraId === aura.id &&
+        profile.playerAuraCarrier === "self"
+    );
+    expect(primary.selectedPlayerAura.level).toBe(primary.playerAuraLevel);
+    expect(primary.activeAuras[0].level).toBe(25);
+    expect(primary.breakdown.physicalBonusPercent.activeAuras).toBe(
+      aura.selfLevelBonuses.find((bonus) => bonus.level === 25)
+        .physicalBonusPercent
+    );
+  });
+
+  it("provides caster and weapon-set damage for stacked owned elemental buffs", () => {
+    const character = createCharacter("Enchant", 20);
+    character.character.class = { id: 1, name: "Sorceress" };
+    character.character.skills.push({ id: 37, name: "Warmth", level: 20 });
+    character.realSkills.push({ skill: "Warmth", level: 20, baseLevel: 20 });
+    character.character.skills.push({ id: 62, name: "Hydra", level: 20 });
+    character.realSkills.push({ skill: "Hydra", level: 20, baseLevel: 20 });
+    character.realStats.fireSkillDamage = 40;
+    const calculation = calculateDamage(character);
+    const enchant = calculation.playerAuraOptions.find(
+      (option) => option.id === "Enchant"
+    );
+    for (const weaponSet of ["primary", "secondary"]) {
+      const profile = calculation.profiles.find(
+        (profile) =>
+          profile.skillId === "Basic Attack" &&
+          profile.weaponId.startsWith(`${weaponSet}:`) &&
+          profile.playerAuraId === "Enchant" &&
+          profile.playerAuraCarrier === "self"
+      );
+      const payload = profile.damageComponents.find(
+        (component) =>
+          component.source === "aura" && component.damageType === "fire"
+      ).damage;
+      expect(
+        enchant.selfLevelBonusesByWeaponSet[weaponSet].find(
+          (bonus) => bonus.level === enchant.level
+        ).elementalDamage.fire
+      ).toEqual(payload);
+      if (weaponSet === "primary") {
+        const summon = calculation.profiles.find(
+          (profile) =>
+            profile.skillId === "Hydra" &&
+            profile.weaponId.startsWith(`${weaponSet}:`) &&
+            profile.playerAuraId === "Enchant" &&
+            profile.playerAuraCarrier === "party"
+        );
+        const summonPayload = summon.damageComponents.find(
+          (component) =>
+            component.source === "aura" && component.damageType === "fire"
+        ).damage;
+        expect(
+          enchant.summonLevelBonusesByWeaponSet[weaponSet].find(
+            (bonus) => bonus.level === enchant.level
+          ).elementalDamage.fire
+        ).toEqual(summonPayload);
+      }
+    }
+    expect(
+      enchant.selfLevelBonusesByWeaponSet.primary.find(
+        (bonus) => bonus.level === 20
+      ).elementalDamage.fire.max
+    ).toBeGreaterThan(
+      enchant.selfLevelBonuses.find((bonus) => bonus.level === 20)
+        .elementalDamage.fire.max
+    );
+  });
+
+  it("precomputes every Battle Command all-skills tier without one profile per level", () => {
+    const character = createCharacter("War Cry", 20);
+    character.character.class = { id: 4, name: "Barbarian" };
+    const calculation = calculateDamage(character);
+    const command = calculation.playerAuraOptions.find(
+      (option) => option.id === "Battle Command"
+    );
+    const profiles = calculation.profiles.filter(
+      (profile) =>
+        profile.skillId === "War Cry" &&
+        profile.playerAuraId === "Battle Command" &&
+        profile.playerAuraCarrier === "self" &&
+        profile.weaponId === calculation.weaponOptions[0].id
+    );
+    expect(profiles).toHaveLength(7);
+    for (let level = 1; level <= 60; level++) {
+      const bonus = command.selfLevelBonuses.find(
+        (bonus) => bonus.level === level
+      ).skillLevelBonus;
+      expect(bonus).toBe(1 + Math.floor(level / 10));
+      expect(
+        profiles.some((profile) => profile.skillLevel === 20 + bonus)
+      ).toBe(true);
+    }
+  });
+
   it("models capped Critical and Deadly Strike as separate expected damage", () => {
     const character = createCharacter("Basic Attack", 1);
     character.items[0].modifiers = [
@@ -3571,6 +3741,11 @@ describeWithGameData("damage calculator component model", () => {
 
     expect(sequenceOption?.sequenceHits).toHaveLength(2);
     expect(sequenceProfile?.sequenceHits).toHaveLength(2);
+    expect(
+      sequenceProfile?.damageComponents
+        .filter((component) => component.damageType === "physical")
+        .every((component) => component.physicalBonusPercent !== undefined)
+    ).toBe(true);
     expect(sequenceProfile?.damageTotals.combinedDamage).toEqual({
       min:
         rightProfile!.damageTotals.combinedDamage.min +

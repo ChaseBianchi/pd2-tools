@@ -75,6 +75,7 @@ export interface DamageComponent {
   timing: DamageComponentTiming;
   damage: DamageRange;
   baseDamage?: DamageRange;
+  physicalBonusPercent?: number;
   poisonDamage?: PoisonDamage;
   includedInTotal?: boolean;
   sourceRefs: DamageSourceReference[];
@@ -136,6 +137,12 @@ export interface DamageAuraOption {
   levelOptions: number[];
   levelBonuses: DamageAuraLevelBonus[];
   selfLevelBonuses: DamageAuraLevelBonus[];
+  selfLevelBonusesByWeaponSet?: Partial<
+    Record<"primary" | "secondary", DamageAuraLevelBonus[]>
+  >;
+  summonLevelBonusesByWeaponSet?: Partial<
+    Record<"primary" | "secondary", DamageAuraLevelBonus[]>
+  >;
   partyLevelBonuses: DamageAuraLevelBonus[];
   source: "none" | "character_skill" | "manual";
 }
