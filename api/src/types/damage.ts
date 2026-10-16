@@ -263,6 +263,7 @@ export interface DamageProfile {
 }
 
 export interface DamageCalculation {
+  combat?: import("./combat").DamageCombatData;
   weaponOptions: DamageWeaponOption[];
   skillOptions: DamageSkillOption[];
   playerAuraOptions: DamageAuraOption[];

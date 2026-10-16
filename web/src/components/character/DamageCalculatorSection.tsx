@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { EffectiveDamageSection } from "./EffectiveDamageSection";
+import { resolveAuraPulseComponents } from "../../utils/effective-damage";
 import {
   Badge,
   Button,
@@ -2215,7 +2217,15 @@ export function DamageCalculatorSection({
 
     return normalizeDamageProfile(
       applyTransformationToProfile(
-        profileWithAuraPulses,
+        damageCalculation.combat
+          ? applyAuraPulseComponents(
+              profileWithAuraPulses,
+              resolveAuraPulseComponents(
+                profileWithAuraPulses,
+                damageCalculation.combat
+              )
+            )
+          : profileWithAuraPulses,
         effectiveTransformationOption,
         effectiveTransformationLevel
       )
@@ -3156,6 +3166,13 @@ export function DamageCalculatorSection({
                   </Stack>
                 </Card>
               </SimpleGrid>
+
+              {!isCompact && damageCalculation && (
+                <EffectiveDamageSection
+                  calculation={damageCalculation}
+                  profile={selectedProfile}
+                />
+              )}
 
               {!isCompact &&
                 damageModelDisplayNotes.length > 0 && (

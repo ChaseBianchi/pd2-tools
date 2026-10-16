@@ -1446,6 +1446,184 @@ describeWithGameData("damage calculator component model", () => {
     );
   });
 
+  it("decodes combat item stats, per-level attack rating, and offensive aura carriers", () => {
+    const character = createCharacter("Basic Attack", 1);
+    character.realStats.dexterity = 100;
+    character.items[0].modifiers = [
+      modifier("item_tohit_perlevel", [6]),
+      modifier("item_ignoretargetac", [1]),
+      modifier("item_fractionaltargetac", [25]),
+    ];
+    const calculation = calculateDamage(character);
+    const weapon = calculation.combat.weapons[calculation.weaponOptions[0].id];
+    expect(weapon.baseAttackRating).toBe(5 * 100 - 35 + 5 + 90 * 6);
+    expect(weapon.ignoreDefense).toBe(true);
+    expect(weapon.targetDefensePercent).toBe(25);
+    expect(weapon.undeadDamage).toBe(50);
+    expect(
+      calculation.combat.effects["Inner Sight"][20].attackRatingPercent
+    ).toBe(0);
+    expect(
+      calculation.combat.effects["Holy Fire"][20].attackRatingPercent
+    ).toBe(0);
+    expect(
+      calculation.combat.effects["Holy Fire"][20].selfAttackRatingPercent
+    ).toBe(145);
+    expect(calculation.combat.effects["Holy Freeze"][20].attackSpeed).toBe(0);
+    expect(calculation.combat.effects.Sanctuary[1].reductions.magic).toBe(5);
+    expect(calculation.combat.effects.Sanctuary[3].reductions.magic).toBe(6);
+    expect(calculation.combat.effects.Decrepify[1].reductions.physical).toBe(
+      10
+    );
+    expect(calculation.combat.effects.Decrepify[21].reductions.physical).toBe(
+      20
+    );
+  });
+
+  it("shares global FCR/pierce across weapons while keeping hand-local attack stats separate", () => {
+    const character = createCharacter("War Cry", 20);
+    character.character.class = { id: 4, name: "Barbarian" };
+    character.items[0].modifiers = [
+      modifier("item_fastercastrate", [40]),
+      modifier("passive_fire_pierce", [5]),
+      modifier("item_crushingblow", [10]),
+    ];
+    character.items.push(
+      createWeapon({
+        id: 2,
+        hash: "offhand-caster",
+        location: {
+          zone: "Equipped",
+          storage: "Equipped",
+          equipment: "Left Hand",
+          equipment_id: 5,
+        },
+        modifiers: [
+          modifier("item_fastercastrate", [40]),
+          modifier("passive_fire_pierce", [10]),
+          modifier("item_crushingblow", [20]),
+        ],
+      })
+    );
+    const calculation = calculateDamage(character);
+    const right = calculation.weaponOptions.find(
+      (w) =>
+        w.slot === "right" &&
+        w.weaponSet === "primary" &&
+        w.handMode === "one_handed"
+    );
+    const left = calculation.weaponOptions.find(
+      (w) =>
+        w.slot === "left" &&
+        w.weaponSet === "primary" &&
+        w.handMode === "one_handed"
+    );
+    expect(calculation.combat.weapons[right.id].fcr).toBe(80);
+    expect(calculation.combat.weapons[right.id].pierce.fire).toBe(15);
+    expect(calculation.combat.weapons[left.id].pierce.fire).toBe(15);
+    expect(calculation.combat.weapons[right.id].crushingBlow).toBe(10);
+    expect(calculation.combat.weapons[left.id].crushingBlow).toBe(20);
+  });
+
+  it("keeps hard-point combat formulas separate from soft levels and Battle Command", () => {
+    const paladin = createCharacter("Smite", 20);
+    paladin.character.class = { id: 3, name: "Paladin" };
+    paladin.realSkills[0].level = 40;
+    paladin.character.skills.push({ id: 108, name: "Blessed Aim", level: 1 });
+    paladin.realSkills.push({ skill: "Blessed Aim", level: 21, baseLevel: 1 });
+    const combat = calculateDamage(paladin).combat;
+    expect(combat.skills.Smite.levels[40].crushingBlow).toBe(25);
+    const primary = Object.entries(combat.weapons).find(([id]) =>
+      id.startsWith("primary:right:")
+    )[1];
+    expect(primary.targetDefensePercent).toBe(1);
+    const barbarian = createCharacter("Increased Speed", 20);
+    barbarian.character.class = { id: 4, name: "Barbarian" };
+    barbarian.realSkills[0].level = 40;
+    for (const weapon of Object.values(
+      calculateDamage(barbarian).combat.weapons
+    )) {
+      expect(weapon.gearIAS).toBe(40);
+      expect(weapon.skillBonuses.every((bonus) => bonus.gearIAS === 0)).toBe(
+        true
+      );
+    }
+    const amazon = createCharacter("Penetrate", 20);
+    amazon.character.class = { id: 0, name: "Amazon" };
+    amazon.realSkills[0].level = 40;
+    amazon.items = [createBow()];
+    const bow = Object.entries(calculateDamage(amazon).combat.weapons).find(
+      ([id]) => id.startsWith("primary:right:missile:")
+    )[1];
+    expect(bow.mastery[0]).toBe(425);
+    expect(bow.mastery[3]).toBe(455);
+    expect(bow.pierce.physical).toBe(10);
+    expect(bow.skillBonuses[7].pierce.physical).toBe(0);
+  });
+
+  it("recalculates Werewolf's Shape Shifting attack rating across Battle Command tiers", () => {
+    const character = createCharacter("Feral Rage", 20);
+    character.character.skills.push({
+      id: 223,
+      name: "Shape Shifting",
+      level: 20,
+    });
+    character.realSkills.push({
+      skill: "Shape Shifting",
+      level: 20,
+      baseLevel: 20,
+    });
+    expect(
+      calculateDamage(character).combat.werewolfAttackRatingBonuses
+    ).toEqual(Array.from({ length: 8 }, (_, bonus) => bonus * 12));
+  });
+
+  it("keeps summon pierce and bleed on the summon rather than the caster", () => {
+    const character = createCharacter("Summon Dire Wolf", 20);
+    character.character.skills.push({
+      id: 227,
+      name: "Blood Golem",
+      level: 20,
+    });
+    character.realSkills.push({
+      skill: "Blood Golem",
+      level: 20,
+      baseLevel: 20,
+    });
+    const combat = calculateDamage(character).combat;
+    for (const weapon of Object.values(combat.weapons)) {
+      expect(weapon.pierce.physical).toBe(0);
+      expect(weapon.openWoundsDps).toBe(0);
+    }
+    expect(combat.skills["Summon Dire Wolf"].levels[20].pierce.physical).toBe(
+      15
+    );
+  });
+
+  it("does not learn unallocated passives through Battle Command", () => {
+    const character = createCharacter("Basic Attack", 1);
+    character.realSkills.push({
+      skill: "Critical Strike",
+      level: 0,
+      baseLevel: 0,
+    });
+    character.character.skills.push({
+      id: 9,
+      name: "Critical Strike",
+      level: 0,
+    });
+    const calculation = calculateDamage(character);
+    for (const profile of calculation.profiles.filter(
+      (profile) => profile.playerAuraId === "Battle Command"
+    )) {
+      expect(
+        profile.strikeBreakdowns.every((strike) => strike.criticalChance === 0)
+      ).toBe(true);
+    }
+    for (const weapon of Object.values(calculation.combat.weapons))
+      expect(weapon.mastery).toEqual(Array(8).fill(0));
+  });
+
   it("precomputes every Battle Command all-skills tier without one profile per level", () => {
     const character = createCharacter("War Cry", 20);
     character.character.class = { id: 4, name: "Barbarian" };
@@ -2647,6 +2825,25 @@ describeWithGameData("damage calculator component model", () => {
           .elementalDamage[element]
       ).toEqual(expected.party);
     });
+  });
+
+  it("does not turn resistance-aura buff values into damage pulses", () => {
+    const calculation = calculateDamage(createCharacter("Basic Attack", 1));
+    const profiles = calculation.profiles.filter((p) =>
+      ["Resist Fire", "Resist Cold", "Resist Lightning"].includes(
+        p.playerAuraId
+      )
+    );
+    expect(profiles.length).toBeGreaterThan(0);
+    expect(profiles.every((p) => !p.auraPulseDamageComponents?.length)).toBe(
+      true
+    );
+  });
+  it("provides pulse curves between precomputed aura levels without inflating raw profile counts", () => {
+    const calculation=calculateDamage(createCharacter("Basic Attack",1));
+    expect(calculation.combat.auraPulses.primary["Holy Fire"][13].fire).toEqual({min:8,max:12});
+    expect(calculation.combat.auraPulses.secondary["Holy Fire"][13].fire).toEqual({min:8,max:12});
+    expect(calculation.combat.auraPulses.primary["Resist Fire"]).toBeUndefined();
   });
 
   it("shows aura pulse damage separately from weapon-hit aura damage", () => {

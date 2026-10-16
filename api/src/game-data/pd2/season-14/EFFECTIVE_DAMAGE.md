@@ -1,0 +1,90 @@
+# Effective damage against monsters and areas
+
+The full damage calculator keeps its original raw profile visible and adds a separate target comparison. Selecting a monster, difficulty, area, or modifier must never change the original skill components, strike bonuses, or raw totals. The component table shows the same pre-target values beside their adjusted values. Matching damage-to-demons/undead bonuses are added before resistance, so adjusted weapon damage can exceed the original raw value.
+
+## Source and reproducibility
+
+`MonLvl.txt`, `Levels.txt`, `Weapons.txt`, and `CharStats.txt` come from the installed `ProjectD2/Live/pd2data.mpq`. Its **Skills and MonStats both exactly match the committed Season 13 baseline**. Explicit Season 14 class-growth and Matriarchal Javelin socket changes were then applied; other imported cells remain baseline values. Character growth fields use quarter points and are preserved as source data; character life/mana from the armory are not rewritten.
+
+`CombatAnimations.json` contains 420 player/form animation records from **PD2's `pd2assets.mpq` override**, plus 23 weapon-class sequence tables from the installed 1.13c `D2Common.dll`. Using the expansion archive instead would incorrectly omit seven PD2 crossbow speed overrides. `TargetNames.json` is generated from the three English string tables and stripped of game color escapes.
+
+| Verified input | SHA-256 |
+| --- | --- |
+| Extracted baseline MonStats | `1b3c08d28b4093d4c154798a5ae9e794f0ed08b1702ee2cb938b1bc5c2e4c5b2` |
+| Extracted baseline Skills | `19f8efbafbe5e2e58f0f010028efc580a4a1ec8899e857094f2cd94b6dd806f4` |
+| PD2 AnimData override | `4e52e1ff25829bf3d87b0bf2c210a7a29496121ffee216395cfbfd9a8ad39ba7` |
+| D2Common.dll | `59fa5928522f566f2bf99675571206ad70df889c89d3d07fa87edf5083e06e10` |
+| ProjectDiablo.dll, installed May 2026 build | `538a77b7ccef3d5334e56c4e9e57a4d8fc69a1e27c46beb694c0dedfcfbf9cb3` |
+
+Reproduce the extraction with `api/tools/extract-combat-data.ps1` using 32-bit Windows PowerShell and a **new scratch output directory**. It reads the installation without changing it. Generate the two JSON catalogs with:
+
+```text
+python api/tools/generate-combat-data.py --extract <scratch-extract> --d2common <installation>/ProjectD2/D2Common.dll --output <scratch-generated>
+```
+
+The generator does not copy extracted tables over the provisional patch. Keep the explicit Season 14 edits when reconciling a new extract. These inputs establish a consistent Season 13 baseline; they are not released Season 14 server files.
+
+The integer attack-roll, animation and proc rules were checked against the installed binaries and the authors' [PD2 advanced-stat research](https://github.com/RoofooEvazan/pd2-advanced-stats/blob/main/FINDINGS.md), [reference implementation](https://github.com/RoofooEvazan/pd2-advanced-stats/blob/main/index.html), and [IAS research](https://hiimpd2.com/ias-calculator). Native addresses in this build include hit chance `0x10271470` and Crushing Blow `0x102AF610`. Those sources describe client code; realm-server changes require reconciliation with a new release.
+
+## Modeled rules
+
+- **Target data:** normal, nightmare, and hell species levels, defense, life, block, demon/undead flags, and six resistances. Expansion nightmare/hell area levels replace ordinary species levels. Bosses retain native levels. Defense and life use the ladder MonLvl columns unless `noRatio` is set. Player-count life scaling is 70% per additional player; explicit life/defense/resistance/level modifiers apply separately.
+- **Resistance:** reducers are independently truncated to half strength against the original immunity. Item/mastery pierce cannot break an immunity. After a break it applies fully; the negative portion is halved and truncated toward zero, with a -100 floor. Duplicate named debuffs use their strongest level; the selected skill's own reducer is not applied twice. Dire Wolf pierce stays on that summon. Poison Strike's conditional pierce applies only to its selected attack.
+- **Physical damage:** conditional demon/undead ED, including the native blunt-weapon bonus, is added to each hand's original physical percentage. Critical and Deadly Strike expected components are then rebuilt for that hand. Owned Sanctuary bypasses positive physical resistance on ordinary undead for the supplier's direct damage; party carriers and summons do not inherit that bypass. Boss/prime-evil exceptions and proc resistance rules remain separate.
+- **Accuracy:** base attack rating uses dexterity, class factor, item AR, normalized armory per-level AR, mastery, selected skill, and aura bonuses. The ItemStatCost `damagerelated` flag keeps hand-local attack stats separate while global FCR/pierce stack across both equipped weapons. Battle Command updates learned passives and Werewolf's Shape Shifting AR dependency without activating unallocated skills. PD2's 111% ratio and diminished excess over 95% use integer arithmetic at each division. Passive percent AR is included alongside mastery AR. Bare hard-point formulas stay distinct from soft levels: Penetrate pierce, Blessed Aim passive defense reduction, Increased Speed IAS and Smite CB chance are not inflated by gear or Battle Command. Negative reducers negate a floored positive magnitude, avoiding false immunity breaks at odd levels. Ignore Target Defense does not bypass bosses; boss fractional-defense reduction is halved. Monster block applies after accuracy. Spells and Smite bypass the normal attack/block roll. Explicit hit-probability and monster-block overrides can model observed contact rates and unblockable summon payloads without inferring their AI. The hit-probability override applies to missed spell contacts as well as attack accuracy; zero probability produces zero direct/DoT application damage.
+- **Cadence:** ordinary held attacks/casts use extracted animations at 25 game frames per second, IAS/FCR diminishing returns, weapon speed, applicable aura speed, cooldown, class start frames, supported sequences, and form animation conversion. Frenzy uses fully ramped skill speed. Straight 100% rollback follow-ups can use automatic timing; form/server differences and partial rollback require an observed hit rate. A sequence profile's rate means complete weapon cycles, while a follow-up profile's rate means hit opportunities.
+- **Poison/ground damage:** poison application totals are divided by duration and weighted by application coverage. Fractional regular attack opportunities are phase-interpolated rather than rounded away. Reapplying the same modeled poison does not multiply its DPS by attack rate. Ground/stream payloads already expressed per second are not multiplied by cast speed. Uptime, hit/contact probability, explicit overlap, and active summon count apply to the appropriate contribution.
+- **Aura pulses:** owned damage-pulse components use the skill's `perdelay` cadence for server functions 66/81. Compact per-level curves for both weapon sets fill arbitrary manual levels without creating one full damage profile per aura level; stale pulse levels are replaced. Resistance/buff application cadence is not treated as a damage pulse. The attacking character is not credited with a party carrier's separate pulses.
+- **Crushing Blow:** normal denominator 8; prime evils use `70 + 10 * missing-life-percent`; the game's special map-boss rule uses 30 when explicitly selected. Each extra player adds 1.4 to the denominator and missile hits multiply it by 1.5. Chance, efficiency, Smite's skill contribution, current target life, hit rate, and physical resistance apply. Gear pierce does not apply to CB. The source MonStats boss flag alone does not identify the special map-boss list, so the UI exposes that rule explicitly.
+- **Open Wounds:** native level bands, stat 501 contribution, physical resistance/pierce, chance, and a five-second application window are modeled. Both hands share the three-stack cap. Fractional opportunities and 100% chance boundaries remain finite. Unequal-hand bleed magnitudes use an application-frequency-weighted steady estimate, rather than pretending to reconstruct the server's stack replacement history.
+
+## Limits that are visible to the user
+
+The catalog contains 1,049 enabled killable monster records and 181 populated areas, including 55 records in the map-area ID range. These are source-table records, not a claim that 55 maps are in the current rotation. Area rows are species comparisons; population weights, fixed boss spawns, pack affixes, routes, collision, travel time, and clear speed are not inferred. A champion/unique pack's extra life/resistance/defense must be represented by explicit modifiers or observed hit probability.
+
+Summon/trap AI, Whirlwind/Blade Dance movement, periodic spells, and uncertain follow-up timing require observed rates. Summon attack accuracy also requires an observed probability (and zero block override for an unblockable payload); caster AR, gear pierce, CB and bleed do not become summon stats. Consumed/generated Iron Golem or Valkyrie equipment remains outside the underlying raw profile. `Needs inputs` is shown when a required rate/probability is missing, rather than substituting caster attack speed.
+
+Corpse Explosion and Death Sentry show a prominent warning: their source profiles exclude corpse-life-dependent damage, so the displayed fixed-payload DPS is incomplete. Conditional splash, secondary missile collision, target regeneration, mana sustain, interrupts, distance falloff, curse resistance and unverified new Season 14 runtime behavior are not reconstructed. Selected buffs/debuffs assume the party can maintain them and the target is in range. Explicit overlap/count/uptime values are scenario assumptions, not measured game telemetry. This is a target model of the supported payloads, not a full game-engine simulator.
+
+## Validation
+
+`effective-damage.test.ts` independently asserts immunity boundaries, negative resistance, integer accuracy, conditional ED/strike recomputation, boss ITD exceptions, Sanctuary ownership, poison coverage, stream rate invariance, current-life/player/ranged CB behavior, shared bleed caps, caster/summon isolation, aura attribution, cooldowns, unknown cadence, table values and area scaling. A 19,649-combination resistance/pierce sweep checks bounded monotonic output. Calculator regressions check armory per-level units, self versus party aura AR, unallocated passives under Battle Command, and summon stats not leaking into caster stats.
+
+API and browser builds keep matching copies of the pure model and combat contract, because their existing Docker build contexts are isolated. A byte-equality regression prevents drift without changing deployment contexts or introducing a shared-package migration.
+
+The final default/scenario matrix covers 126 snapshots (123 public captures plus three controlled respecs), 118,771 precomputed profiles, 128 source skills including Basic Attack, and 162 charge/variant selections. It completed **3,373,962 target results with zero assertion failures**:
+
+| Sweep | Target results/checks |
+| --- | ---: |
+| Every catalog monster, all three difficulties | 509,814 |
+| Every populated area and applicable difficulty | 1,492,992 |
+| Self/party auras at levels 1, 20 and 60 | 227,448 |
+| Curse/debuff combinations | 196,830 |
+| Rate, contact, block, uptime, overlap and count boundaries | 233,280 |
+| Automatic timing comparisons | 1,620 |
+| Slower timing monotonicity | 810 |
+| Raw-profile preservation fingerprints | 2,144,868 |
+
+The categories overlap and are not a sum of independent observations. The matrix checks invariants and scenario arithmetic, not agreement with a running realm server.
+
+Browser verification completed **650 passing comparisons**, including reruns after fixes, across 145 skill/charge selections on 66 captured real characters and three controlled respecs. They cover all 128 supported source skills, including Basic Attack and all four skeletal-mage elements. Each case first reads the no-target raw cards, checks the API component total against those displayed values, then compares adjusted ranges, landed probability and DPS against Hell Diablo and all eight species in Hell Arreat Battlefield. Finally it restores no-target mode and checks that the raw cards are identical. Decimal displays are compared within their rounding precision.
+
+All 27 selectable auras were exercised as self and party carriers. Additional browser cases cover arbitrary pulse levels, Battle Command tier transitions, combined auras and reversed order, automatic accuracy/cadence, player count, target modifiers, warcry/curse combinations, slow effects, fractional rates/contact, zero actions/contact, summon count/block, poison saturation and depleted-life Smite procs. **Eight preliminary comparisons were invalidated by reference-harness selection errors** (retained Blade Dance offhand and missing seed-aura fallback), then repeated with matching inputs. Historical observations remain in the local ledger. A real arbitrary-level Holy Fire pulse omission and hard-point calculation defects were fixed and their affected scenarios repeated; passing old observations are not evidence for those superseded implementations.
+
+[`effective-validation-skills.csv`](effective-validation-skills.csv) contains the latest passing base-selection browser rows: **1,305 rows**, with source skill, charge, raw range, adjusted range, landed chance and DPS. These use two actions/cycles per second and 75% contact before monster block to make comparisons reproducible; they are not measured combat cadence. The browser oracle shares the pure model, so agreement establishes UI integration; independently derived unit assertions, table checks and native-rule reconciliation establish arithmetic separately.
+
+Final automated validation: **492 backend tests and seven frontend tests pass**; backend ESLint/TypeScript and both production builds pass. Frontend application TypeScript checking still has the same **113 pre-existing diagnostics** as an archived HEAD baseline, with zero new or resolved diagnostics after normalizing source paths/line offsets. Existing bundle-size and test-shutdown connection warnings remain.
+
+The read-only armory captures, controlled respec provenance, scripts, outlier audit, screenshot and numeric ledgers are retained locally in `%TEMP%/pd2-s14-real-qa`; production database records are not changed. The new patch-only skills use explicitly recorded controlled respecs of captured characters because natural allocated examples were unavailable.
+
+### Adversarial review and sanity checks
+
+Review challenged the assumptions most likely to produce plausible but wrong DPS: using the vanilla animation archive, applying resistance-buff cadence as damage, copying caster stats to summons, multiplying poison/stream totals by cast speed, decoding armory per-level values twice, treating all offhand stats as local, letting Battle Command learn unallocated passives, mixing hard and soft levels, rounding negative reducers downward, using a 1/7 normal Crushing Blow fraction, and independently capping each hand's bleed stacks. The implementation and regression assertions address those cases.
+
+A separate 248-scenario outlier audit compares baseline payloads at two events/sec and full contact against Diablo and an ordinary quill rat. High Arctic Blast DPS follows its already-per-second source total and cold pierce; it is not multiplied by the action rate. Low Iron Golem damage follows its fixed base payload, with consumed equipment explicitly excluded. These checks found no unexplained nonfinite, negative, or extreme multiplier outputs. Large source values still require game-side verification when released Season 14 runtime data becomes available.
+
+
+### Independently reconciled examples
+
+- Holy Fire level 13, with no synergies/mastery, has raw pulse damage **8–12** from the table's damage tiers and HitShift. At a one-second cadence against Hell Diablo's 50% fire resistance, its pulse contribution is **5 DPS**. The browser now shows 8–12 before selecting a target and preserves it after selection. Previously, only a matching precomputed aura level retained this separate payload.
+- Open Wounds item values were checked against extracted unique-item ranges: Gore Rider stat 501 rolls 140–200, Dracul's 240–320, and Atma's 200–300, matching the captured armory modifier values. The native proc converts that stat with its own five-subpoint contribution; it is not treated as an already-converted per-frame value. These diagnostic item tables were read only for unit verification and were not added as new item-generation sources.
