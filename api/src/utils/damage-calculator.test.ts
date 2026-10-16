@@ -15,7 +15,7 @@ const gameDataPath = path.resolve(
   "src",
   "game-data",
   "pd2",
-  "season-13"
+  "season-14"
 );
 const hasRequiredGameData = requiredGameFiles.every((fileName) =>
   fs.existsSync(path.join(gameDataPath, fileName))
@@ -364,6 +364,337 @@ function createCharacter(skillName: string, level: number): CharacterData {
     realStats: createStats(),
   } as unknown as CharacterData;
 }
+
+describe("Season 14 patch damage regressions", () => {
+  beforeAll(async () => {
+    ({ calculateDamage } = await import("./damage-calculator"));
+  });
+
+  function patchProfile(
+    skill: string,
+    level: number,
+    synergies: string[] = []
+  ) {
+    const character = createCharacter(skill, level);
+    if (
+      ["Jab", "Power Strike", "Charged Strike", "Lightning Strike"].includes(
+        skill
+      )
+    ) {
+      character.character.class = { id: 0, name: "Amazon" };
+      character.items[0].base = {
+        ...character.items[0].base,
+        id: "spr",
+        type: "Spear",
+        type_code: "spea",
+      };
+      character.items[0].base_code = "spr";
+    }
+    character.character.skills.push(
+      ...synergies.map((name, index) => ({ id: 600 + index, name, level: 1 }))
+    );
+    character.realSkills.push(
+      ...synergies.map((name) => ({ skill: name, level: 20, baseLevel: 1 }))
+    );
+    return calculateDamage(character).profiles.find(
+      (profile) => profile.skillId === skill && profile.playerAuraId === "none"
+    )!;
+  }
+
+  // Independent values from the patch notes, rather than the tables under test.
+  const spellCases = [
+    {
+      skill: "Fissure",
+      element: "fire",
+      base: [15, 25],
+      min: [4, 8, 14, 22, 34],
+      max: [6, 10, 16, 24, 36],
+    },
+    {
+      skill: "Twister",
+      element: "physical",
+      base: [6.5, 9],
+      min: [2, 4, 10.5, 22, 42],
+      max: [3.5, 5, 11.5, 23, 44],
+    },
+    {
+      skill: "Tornado",
+      element: "physical",
+      base: [32, 35],
+      min: [7, 15, 24, 33, 42],
+      max: [9, 18, 26, 35, 44],
+    },
+    {
+      skill: "Hurricane",
+      element: "cold",
+      base: [25, 50],
+      min: [4, 8, 12, 16, 20],
+      max: [7, 11, 15, 19, 23],
+    },
+    {
+      skill: "Poison Nova",
+      element: "poison",
+      base: [50, (29 * 50) / 16],
+      min: [6, 7, 8, 9, 9].map((v) => (v * 50) / 16),
+      max: [6, 7, 8, 9, 9].map((v) => (v * 50) / 16),
+    },
+  ];
+
+  it.each(spellCases)(
+    "uses $skill damage at every scaling boundary",
+    ({ skill, element, base, min, max }) => {
+      for (const level of [1, 8, 9, 16, 17, 22, 23, 28, 29, 40, 60]) {
+        const tiers = [
+          Math.min(level - 1, 7),
+          Math.max(0, Math.min(level - 8, 8)),
+          Math.max(0, Math.min(level - 16, 6)),
+          Math.max(0, Math.min(level - 22, 6)),
+          Math.max(0, level - 28),
+        ];
+        const expected = {
+          min: Math.floor(
+            base[0] + tiers.reduce((sum, count, i) => sum + count * min[i], 0)
+          ),
+          max: Math.floor(
+            base[1] + tiers.reduce((sum, count, i) => sum + count * max[i], 0)
+          ),
+        };
+        expect(
+          patchProfile(skill, level).damageTotals.byElement[element]
+        ).toEqual(expected);
+      }
+    }
+  );
+
+  it.each([
+    [
+      "Charged Strike",
+      ["Lightning Strike", "Power Strike"],
+      "lightning",
+      { min: 8, max: 48 },
+    ],
+    [
+      "Lightning Strike",
+      ["Charged Strike", "Power Strike"],
+      "lightning",
+      { min: 7, max: 30 },
+    ],
+    ["Hurricane", ["Arctic Blast", "Tornado"], "cold", { min: 31, max: 63 }],
+    ["Combustion", ["Fire Bolt", "Fire Ball"], "fire", { min: 14, max: 33 }],
+    [
+      "Poison Nova",
+      ["Poison Dagger", "Desecrate"],
+      "poison",
+      { min: 61, max: 110 },
+    ],
+  ])(
+    "uses hard-point synergies for %s",
+    (skill, synergies, element, expected) => {
+      expect(
+        patchProfile(skill, 1, synergies).damageTotals.byElement[element]
+      ).toEqual(expected);
+    }
+  );
+
+  it("updates Frost Nova synergies without counting soft points", () => {
+    expect(
+      patchProfile("Frost Nova", 8, ["Ice Bolt", "Shiver Armor"]).damageTotals
+        .byElement.cold
+    ).toEqual({ min: 20, max: 26 });
+  });
+
+  it("updates both Power Strike payloads without adding hidden weapon enhanced damage", () => {
+    const profile = patchProfile("Power Strike", 8, [
+      "Lightning Bolt",
+      "Lightning Strike",
+    ]);
+    expect(profile.breakdown.physicalBonusPercent.selectedSkill).toBe(0);
+    expect(
+      profile.damageComponents.find((component) =>
+        component.sourceRefs.some(
+          (ref) => ref.row === "Power Strike" && ref.columns.includes("EMin")
+        )
+      )?.damage
+    ).toEqual({ min: 1, max: 33 });
+    expect(
+      profile.damageComponents.find((component) =>
+        component.sourceRefs.some((ref) => ref.row === "powerstrikenova2")
+      )?.damage
+    ).toEqual({ min: 1, max: 46 });
+  });
+
+  it.each([
+    [1, 50, 5],
+    [20, 126, 24],
+    [25, 146, 29],
+    [40, 206, 29],
+  ])(
+    "updates Multiple Shot damage and arrow count at level %s",
+    (level, damagePercent, arrows) => {
+      const character = createCharacter("Multiple Shot", level);
+      character.items = [createBow()];
+      const profile = calculateDamage(character).profiles.find(
+        (candidate) =>
+          candidate.skillId === "Multiple Shot" &&
+          candidate.playerAuraId === "none"
+      )!;
+      expect(profile.breakdown.physicalBonusPercent.selectedSkill).toBe(
+        damagePercent
+      );
+      expect(profile.damageScope.count).toBe(arrows);
+      expect(profile.totalPhysicalDamage).toEqual({
+        min: Math.floor(10 * (1 + damagePercent / 100)),
+        max: Math.floor(20 * (1 + damagePercent / 100)),
+      });
+    }
+  );
+
+  it.each([
+    ["Jab", ["Fend"], 327],
+    ["Leap Attack", ["Leap", "Bash"], 450],
+  ])(
+    "updates %s enhanced damage and synergies",
+    (skill, synergies, expected) => {
+      expect(
+        patchProfile(skill, 20, synergies).breakdown.physicalBonusPercent
+          .selectedSkill
+      ).toBe(expected);
+    }
+  );
+
+  it("replaces the Cold Enchant synergy on each cold armor", () => {
+    for (const [skill, synergy, expected] of [
+      ["Shiver Armor", "Frost Nova", { min: 9, max: 12 }],
+      ["Chilling Armor", "Blizzard", { min: 6, max: 8 }],
+    ]) {
+      expect(
+        patchProfile(skill, 1, [synergy]).damageTotals.byElement.cold
+      ).toEqual(expected);
+      expect(
+        patchProfile(skill, 1, ["Cold Enchant"]).damageTotals.byElement.cold
+      ).toEqual(patchProfile(skill, 1).damageTotals.byElement.cold);
+    }
+  });
+
+  it("updates Phoenix Strike meteor and ice tiers without changing its lightning or ground fire", () => {
+    for (const level of [1, 8, 9, 16, 17, 22, 23, 28, 29, 60]) {
+      const character = createCharacter("Phoenix Strike", level);
+      character.character.class = { id: 6, name: "Assassin" };
+      character.character.skills.push({
+        id: 259,
+        name: "Fists of Fire",
+        level: 1,
+      });
+      character.realSkills.push({
+        skill: "Fists of Fire",
+        level: 20,
+        baseLevel: 1,
+      });
+      character.items[0].base = {
+        ...character.items[0].base,
+        id: "ktr",
+        type: "Katar",
+        type_code: "h2h",
+      };
+      const profiles = calculateDamage(character).profiles.filter(
+        (profile) =>
+          profile.skillId === "Phoenix Strike" &&
+          profile.playerAuraId === "none"
+      );
+      const meteor = profiles
+        .find((profile) => profile.chargeNumber === 1)!
+        .damageComponents.find((component) =>
+          component.sourceRefs.some((ref) => ref.row === "royalstrikemeteor")
+        )!;
+      const ice = profiles
+        .find((profile) => profile.chargeNumber === 3)!
+        .damageComponents.find((component) =>
+          component.sourceRefs.some((ref) => ref.row === "royalstrikechaosice")
+        )!;
+      const tiers = [
+        Math.min(level - 1, 7),
+        Math.max(0, Math.min(level - 8, 8)),
+        Math.max(0, Math.min(level - 16, 6)),
+        Math.max(0, Math.min(level - 22, 6)),
+        Math.max(0, level - 28),
+      ];
+      expect(meteor.damage).toEqual({
+        min: Math.floor(
+          (20 +
+            tiers.reduce(
+              (sum, count, i) => sum + count * [12, 23, 35, 46, 55][i],
+              0
+            )) *
+            1.1
+        ),
+        max: Math.floor(
+          (40 +
+            tiers.reduce(
+              (sum, count, i) => sum + count * [12, 25, 40, 50, 60][i],
+              0
+            )) *
+            1.1
+        ),
+      });
+      expect(ice.damage).toEqual({
+        min:
+          19 +
+          tiers.reduce(
+            (sum, count, i) => sum + count * [4, 8, 14, 24, 34][i],
+            0
+          ),
+        max:
+          38 +
+          tiers.reduce(
+            (sum, count, i) => sum + count * [4, 8, 16, 25, 35][i],
+            0
+          ),
+      });
+    }
+    const before = fs
+      .readFileSync(
+        path.join(gameDataPath, "../season-13/Missiles.txt"),
+        "utf8"
+      )
+      .split(/\r?\n/);
+    const after = fs
+      .readFileSync(path.join(gameDataPath, "Missiles.txt"), "utf8")
+      .split(/\r?\n/);
+    for (const row of ["royalstrikechainlightning", "royalstrikemeteorfire"]) {
+      expect(after.find((line) => line.startsWith(`${row}\t`))).toBe(
+        before.find((line) => line.startsWith(`${row}\t`))
+      );
+    }
+  });
+
+  it("applies the new one-handed critical cap and two-handed mastery damage", () => {
+    const oneHand = createCharacter("One Hand Mastery", 60);
+    oneHand.character.class = { id: 4, name: "Barbarian" };
+    const oneHandProfile = calculateDamage(oneHand).profiles.find(
+      (profile) =>
+        profile.skillId === "Basic Attack" && profile.playerAuraId === "none"
+    )!;
+    expect(oneHandProfile.strikeBreakdowns[0].criticalChance).toBe(45);
+    for (const [level, expected] of [
+      [1, 40],
+      [20, 230],
+    ]) {
+      const twoHand = createCharacter("Two Hand Mastery", level);
+      twoHand.character.class = { id: 4, name: "Barbarian" };
+      twoHand.items[0].damage = {
+        one_handed: {},
+        two_handed: { minimum: 10, maximum: 20 },
+        missile: {},
+      };
+      const profile = calculateDamage(twoHand).profiles.find(
+        (candidate) =>
+          candidate.skillId === "Basic Attack" &&
+          candidate.playerAuraId === "none"
+      )!;
+      expect(profile.breakdown.physicalBonusPercent.passive).toBe(expected);
+    }
+  });
+});
 
 const describeWithGameData = hasRequiredGameData ? describe : describe.skip;
 const describeWithArmorData =

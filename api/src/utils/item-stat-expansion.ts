@@ -21,7 +21,7 @@ const PD2_GAME_DATA_DIRECTORY = path.resolve(
   "src",
   "game-data",
   "pd2",
-  "season-13"
+  "season-14"
 );
 
 const PROPERTY_ALIASES: Record<string, string> = {

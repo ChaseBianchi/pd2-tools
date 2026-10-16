@@ -96,7 +96,7 @@ const PD2_GAME_DATA_DIRECTORY = path.resolve(
   "src",
   "game-data",
   "pd2",
-  "season-13"
+  "season-14"
 );
 
 const DEFAULT_DAMAGE_SCOPE: DamageProfile["damageScope"] = {
@@ -674,7 +674,7 @@ function loadPd2GameData(): GameData {
 
   if (missingRequiredFiles.length > 0) {
     throw new Error(
-      `Damage calculator requires committed PD2 game tables under api/src/game-data/pd2/season-13. Missing: ${missingRequiredFiles.join(", ")}.`
+      `Damage calculator requires committed PD2 game tables under api/src/game-data/pd2/season-14. Missing: ${missingRequiredFiles.join(", ")}.`
     );
   }
 
