@@ -401,26 +401,26 @@ describe("Season 14 patch damage regressions", () => {
     )!;
   }
 
-  // Independent values from the patch notes, rather than the tables under test.
+  // Independently transcribed beta values, rather than reading the tables under test.
   const spellCases = [
     {
       skill: "Fissure",
       element: "fire",
       base: [15, 25],
-      min: [4, 8, 14, 22, 34],
-      max: [6, 10, 16, 24, 36],
+      min: [4, 8, 14, 22, 28],
+      max: [6, 10, 16, 24, 30],
     },
     {
       skill: "Twister",
       element: "physical",
       base: [6.5, 9],
-      min: [2, 4, 10.5, 22, 42],
-      max: [3.5, 5, 11.5, 23, 44],
+      min: [2, 4, 10.5, 22, 34],
+      max: [3.5, 5, 11.5, 23, 35],
     },
     {
       skill: "Tornado",
       element: "physical",
-      base: [32, 35],
+      base: [35, 39],
       min: [7, 15, 24, 33, 42],
       max: [9, 18, 26, 35, 44],
     },
@@ -480,7 +480,7 @@ describe("Season 14 patch damage regressions", () => {
       { min: 7, max: 30 },
     ],
     ["Hurricane", ["Arctic Blast", "Tornado"], "cold", { min: 31, max: 63 }],
-    ["Combustion", ["Fire Bolt", "Fire Ball"], "fire", { min: 14, max: 33 }],
+    ["Combustion", ["Fire Bolt", "Fire Ball"], "fire", { min: 14, max: 34 }],
     [
       "Poison Nova",
       ["Poison Dagger", "Desecrate"],
@@ -526,8 +526,8 @@ describe("Season 14 patch damage regressions", () => {
   it.each([
     [1, 50, 5],
     [20, 126, 24],
-    [25, 146, 29],
-    [40, 206, 29],
+    [25, 146, 25],
+    [40, 206, 25],
   ])(
     "updates Multiple Shot damage and arrow count at level %s",
     (level, damagePercent, arrows) => {
@@ -620,7 +620,7 @@ describe("Season 14 patch damage regressions", () => {
       ];
       expect(meteor.damage).toEqual({
         min: Math.floor(
-          (20 +
+          (24 +
             tiers.reduce(
               (sum, count, i) => sum + count * [12, 23, 35, 46, 55][i],
               0
@@ -628,7 +628,7 @@ describe("Season 14 patch damage regressions", () => {
             1.1
         ),
         max: Math.floor(
-          (40 +
+          (48 +
             tiers.reduce(
               (sum, count, i) => sum + count * [12, 25, 40, 50, 60][i],
               0
@@ -638,15 +638,15 @@ describe("Season 14 patch damage regressions", () => {
       });
       expect(ice.damage).toEqual({
         min:
-          19 +
+          32 +
           tiers.reduce(
-            (sum, count, i) => sum + count * [4, 8, 14, 24, 34][i],
+            (sum, count, i) => sum + count * [8, 16, 24, 40, 56][i],
             0
           ),
         max:
-          38 +
+          64 +
           tiers.reduce(
-            (sum, count, i) => sum + count * [4, 8, 16, 25, 35][i],
+            (sum, count, i) => sum + count * [8, 16, 26, 42, 58][i],
             0
           ),
       });
@@ -1145,24 +1145,6 @@ function getExpectedPlaguePoppyPoisonPayloadFromGameFiles({
   };
 }
 
-function getExpectedSkillLinearAliasFromGameFiles(
-  skillName: string,
-  level: number,
-  expression: string
-) {
-  const skills = loadGameFile("Skills.txt", "skill");
-  const match = expression.match(/^skill\('([^']+)'\.ln([1-8])([1-8])\)$/);
-
-  expect(match?.[1]).toBe(skillName);
-
-  const row = skills.rowsByKey.get(skillName)!;
-  return (
-    getGameFileNumber(skills, row, `Param${match![2]}`) +
-    Math.max(0, level - 1) *
-      getGameFileNumber(skills, row, `Param${match![3]}`)
-  );
-}
-
 function getExpectedSummonPhysicalPayloadFromGameFiles(
   skillName: string,
   level: number
@@ -1217,9 +1199,7 @@ function getExpectedSkeletonDamagePercentFromGameFiles({
         : (skillLevel - 3) * getGameFileNumber(skills, row, "Param3");
     total += skeletonArcherBaseLevel * getGameFileNumber(skills, row, "Param7");
   } else {
-    expect(getGameFileCell(skills, row, "DmgSymPerCalc")).toBe(
-      getGameFileCell(skills, row, "passivecalc4")
-    );
+    expect(getGameFileCell(skills, row, "DmgSymPerCalc")).toBe("");
     total += raiseSkeletonBaseLevel * getGameFileNumber(skills, row, "Param7");
   }
 
@@ -1300,6 +1280,50 @@ function getExpectedSkeletonArcherDirectPhysicalFromGameFiles({
 describeWithGameData("damage calculator component model", () => {
   beforeAll(async () => {
     ({ calculateDamage } = await import("./damage-calculator"));
+  });
+
+  it("treats beta Warmth as flat AR and updates it through Battle Command", () => {
+    const character = createCharacter("Warmth", 20);
+    character.character.class = { id: 1, name: "Sorceress" };
+    character.character.attributes.dexterity = 100;
+    const calculation = calculateDamage(character);
+    const weapon = calculation.combat.weapons[calculation.weaponOptions[0].id];
+    // 5 * dex - 35 + Sorceress ToHitFactor(-15) + Warmth(20 + 19 * 10).
+    expect(weapon.baseAttackRating).toBe(660);
+    expect(weapon.mastery).toEqual(Array(8).fill(0));
+    expect(weapon.skillBonuses.map((bonus) => bonus.baseAttackRating)).toEqual(
+      [0, 10, 20, 30, 40, 50, 60, 70]
+    );
+  });
+
+  it("reads Poison Strike pierce from the beta temporary aura without making it a permanent passive", () => {
+    const character = createCharacter("Poison Strike", 20);
+    character.character.class = { id: 2, name: "Necromancer" };
+    const combat = calculateDamage(character).combat;
+    expect(combat.skills["Poison Strike"].levels[20].pierce.poison).toBe(24);
+    expect(combat.skills["Poison Strike"].levels[60].pierce.poison).toBe(50);
+    for (const weapon of Object.values(combat.weapons))
+      expect(weapon.pierce.poison).toBe(0);
+  });
+
+  it.each([
+    [1, { min: 11, max: 17 }, { min: 12, max: 22 }],
+    [20, { min: 104, max: 137 }, { min: 130, max: 167 }],
+  ])("separates beta Fire Claws melee and source-tooltip ground DPS at level %s", (level, hit, ground) => {
+    const calculation = calculateDamage(createCharacter("Fire Claws", level));
+    const profile = calculation.profiles.find((p) => p.skillId === "Fire Claws" && p.playerAuraId === "none");
+    expect(profile.damageComponents.find((c) => c.source === "skill" && c.damageType === "fire")).toMatchObject({damage: hit, timing: "instant"});
+    expect(profile.damageComponents.find((c) => c.sourceRefs.some((r) => r.row === "clawfirestorm"))).toMatchObject({damage: ground, timing: "over_time"});
+  });
+
+  it("uses beta temporary attack-speed stats for Split Throw and Double Swing", () => {
+    const character = createCharacter("Split Throw", 20);
+    character.character.class = { id: 4, name: "Barbarian" };
+    character.character.skills.push({ id: 133, name: "Double Swing", level: 20 });
+    character.realSkills.push({ skill: "Double Swing", level: 20, baseLevel: 20 });
+    const combat = calculateDamage(character).combat;
+    expect(combat.skills["Split Throw"].levels[20].attackSpeed).toBe(10);
+    expect(combat.skills["Double Swing"].levels[20].attackSpeed).toBe(50);
   });
 
   it("resolves live Poison Strike names for attack profiles and Poison Nova synergies", () => {
@@ -1596,7 +1620,7 @@ describeWithGameData("damage calculator component model", () => {
       expect(weapon.openWoundsDps).toBe(0);
     }
     expect(combat.skills["Summon Dire Wolf"].levels[20].pierce.physical).toBe(
-      15
+      17
     );
   });
 
@@ -1946,7 +1970,7 @@ describeWithGameData("damage calculator component model", () => {
         ?.strikeModifiers
     ).toMatchObject({ deadlyStrikeChance: 15 });
     expect(
-      spiritOfBarbs.selfLevelBonuses.find((bonus) => bonus.level === level)
+      spiritOfBarbs.selfLevelBonusesByWeaponSet.primary.find((bonus) => bonus.level === level)
         ?.strikeModifiers
     ).toMatchObject({
       deadlyStrikeChance: 27,
@@ -3394,7 +3418,7 @@ describeWithGameData("damage calculator component model", () => {
     expect(fistProfile!.damageScope).toEqual(
       expect.objectContaining({
         label: "per primary hit plus one bolt",
-        count: 4,
+        count: 50,
         countLabel: "holy bolts",
       })
     );
@@ -4452,7 +4476,7 @@ describeWithGameData("damage calculator component model", () => {
       profiles.every(
         (profile) =>
           profile.damageScope.label ===
-          "per weapon hit plus one fire payload"
+          "per weapon hit plus ground DPS"
       )
     ).toBe(true);
   });
@@ -4622,11 +4646,8 @@ describeWithMonStatsData("summon damage modeling", () => {
     const skills = loadGameFile("Skills.txt", "skill");
     const spiritWolfRow = skills.rowsByKey.get("Summon Spirit Wolf")!;
     const calc = getGameFileCell(skills, spiritWolfRow, "passivecalc3");
-    const expectedDamagePercent = getExpectedSkillLinearAliasFromGameFiles(
-      "Summon Grizzly",
-      grizzlyLevel,
-      calc
-    );
+    expect(calc).toBe("(skill('Summon Grizzly'.blvl) > 0) ? (skill('Summon Grizzly'.par1) + (skill('Summon Grizzly'.blvl)-1)*skill('Summon Grizzly'.par2)) : 0");
+    const expectedDamagePercent = 25 + (grizzlyLevel - 1) * 10;
     const expectedBaseDamage = getExpectedSummonPhysicalPayloadFromGameFiles(
       "Summon Spirit Wolf",
       spiritWolfLevel

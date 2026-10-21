@@ -434,6 +434,7 @@ export function calculateEffectiveDamage(
     const extra = w.skillBonuses?.[allSkills];
     return {
       ...w,
+      baseAttackRating: w.baseAttackRating + (extra?.baseAttackRating || 0),
       fcr: Math.max(0, w.fcr - settings.castSlow),
       gearIAS: w.gearIAS + (extra?.gearIAS || 0),
       crushingBlow: w.crushingBlow + (extra?.crushingBlow || 0),

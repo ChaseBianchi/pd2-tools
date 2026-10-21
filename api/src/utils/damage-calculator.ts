@@ -179,10 +179,10 @@ const SKILL_DAMAGE_SCOPE_DEFINITIONS: Record<string, DamageScopeDefinition> = {
     note: "Shock Wave totals are per missile. Skills.txt calc1 exposes missile count; overlap, target count, and cast rate are not multiplied into totals.",
   },
   [normalizeSkillName("Fire Claws").toLowerCase()]: {
-    label: "per weapon hit plus one fire payload",
+    label: "per weapon hit plus ground DPS",
     countColumn: "calc2",
     countLabel: "fire missiles",
-    note: "Fire Claws totals include the melee weapon hit plus one modeled fire payload. Skills.txt calc2 exposes fire missile count; overlap, target count, hit chance, and attack rate are not multiplied into totals.",
+    note: "Fire Claws separates the melee hit from ground-fire DPS. Ground damage uses SkillDesc's 5/2 display multiplier for one sustained payload; missile count, overlap and attack rate are not multiplied into that payload.",
   },
   [normalizeSkillName("Zeal").toLowerCase()]: {
     label: "per weapon hit",
@@ -1911,6 +1911,11 @@ function getGameDotMultiplier(
     return getGameRowNumber(tableName, row, "ELen") || 1;
   }
 
+  // Beta SkillDesc fire claws desccalca/b2 displays missile damage * 5 / 2.
+  if (tableName === "Missiles" && rowKey === "clawfirestorm") {
+    return 5 / 2;
+  }
+
   if (
     tableName === "Missiles" &&
     rowKey[0] === rowKey[0]?.toLowerCase() &&
@@ -2044,7 +2049,7 @@ function evaluateGameCalcExpression(
   );
 
   const normalized = expression
-    .replace(/^"|"$/g, "")
+    .replace(/"/g, "")
     .replace(/\bmin\(/g, "Math.min(")
     .replace(/\bmax\(/g, "Math.max(")
     .replace(/skill\('([^']+)'\.blvl\)/g, (_, skillName: string) =>
@@ -6402,8 +6407,11 @@ function getAuraSkillLevelBonus(aura: AuraSource): number {
   return gameValue ?? 0;
 }
 
-function getAuraStrikeStatValue(aura: AuraSource, statName: string): number {
-  const skillMap = new Map<string, SkillEntry>();
+function getAuraStrikeStatValue(
+  aura: AuraSource,
+  statName: string,
+  skillMap: Map<string, SkillEntry>
+): number {
   const selfValue =
     aura.carrier === "self"
       ? getGameAuraStatValue(aura, [statName], "self", skillMap)
@@ -6415,18 +6423,27 @@ function getAuraStrikeStatValue(aura: AuraSource, statName: string): number {
   );
 }
 
-function getAuraStrikeModifiers(aura: AuraSource): DamageStrikeModifiers {
+function getAuraStrikeModifiers(
+  aura: AuraSource,
+  skillMap = EMPTY_SKILL_MAP
+): DamageStrikeModifiers {
   return {
-    criticalChance: getAuraStrikeStatValue(aura, "item_crit_chance"),
-    deadlyStrikeChance: getAuraStrikeStatValue(aura, "item_deadlystrike"),
-    maxDeadlyStrikeChance: getAuraStrikeStatValue(aura, "item_maxdeadlystrike"),
+    criticalChance: getAuraStrikeStatValue(aura, "item_crit_chance", skillMap),
+    deadlyStrikeChance: getAuraStrikeStatValue(aura, "item_deadlystrike", skillMap),
+    maxDeadlyStrikeChance: getAuraStrikeStatValue(
+      aura,
+      "item_maxdeadlystrike",
+      skillMap
+    ),
     criticalMultiplierBonus: getAuraStrikeStatValue(
       aura,
-      "item_crit_multiplier"
+      "item_crit_multiplier",
+      skillMap
     ),
     deadlyStrikeMultiplierBonus: getAuraStrikeStatValue(
       aura,
-      "item_ds_multiplier"
+      "item_ds_multiplier",
+      skillMap
     ),
   };
 }
@@ -6799,7 +6816,7 @@ function getManualAuraLevelBonus(
       context?.skillMap || new Map(),
       context?.realStats
     ),
-    strikeModifiers: getAuraStrikeModifiers(aura),
+    strikeModifiers: getAuraStrikeModifiers(aura, context?.skillMap),
   };
 }
 
@@ -8053,7 +8070,10 @@ function buildProfile(
   activeAuras.forEach((aura) => {
     strikeModifiers = addStrikeModifiers(
       strikeModifiers,
-      getAuraStrikeModifiers(aura)
+      getAuraStrikeModifiers(
+        aura,
+        aura.carrier === "self" ? effectiveSkillMap : EMPTY_SKILL_MAP
+      )
     );
   });
   const strikeBreakdowns = skillCanApplyStrikeDamage(selectedSkillName)
@@ -8594,6 +8614,9 @@ function buildCombatData(
       );
       return {
         pierce: extraPierce,
+        baseAttackRating:
+          mastery(selection, bonus, ["tohit"]) -
+          mastery(selection, 0, ["tohit"]),
         gearIAS:
           mastery(selection, bonus, ["item_fasterattackrate"]) - passiveIAS,
         crushingBlow:
@@ -8618,7 +8641,8 @@ function buildCombatData(
             character.character.attributes.dexterity) -
         35 +
         Number(combatClasses.get(className)?.ToHitFactor || 0) +
-        statTotal(selection, "tohit"),
+        statTotal(selection, "tohit") +
+        mastery(selection, 0, ["tohit"]),
       attackRatingPercent: statTotal(selection, "item_tohit_percent"),
       mastery: Array.from({ length: 8 }, (_, i) => mastery(selection, i)),
       weaponClass: weapon
@@ -8753,7 +8777,7 @@ function buildCombatData(
         if (name === "Poison Strike" || name === "Poison Dagger")
           pierce.poison = row
             ? evaluateGameCalcExpression(
-                getGameRowString("Skills", row, "calc1"),
+                findGameAuraStatCalc(row, ["passive_pois_pierce"], "party") || "",
                 row,
                 context.skillMap,
                 level
@@ -8805,11 +8829,15 @@ function buildCombatData(
                   context.skillMap,
                   level
                 )
-              : name === "Double Swing" && row
-                ? getGameSkillParam(row, 5)
-                : name === "Dragon Tail" && row
-                  ? getGameSkillParam(row, 4)
-                  : 0,
+              : row &&
+                  getGameRowString("Skills", row, "aurastate") === "temp_skill_buff"
+                ? evaluateGameCalcExpression(
+                    findGameAuraStatCalc(row, ["attackrate"], "party") || "",
+                    row,
+                    context.skillMap,
+                    level
+                  )
+                : 0,
           hits: Math.max(1, hits),
           reductions,
           pierce,

@@ -136,6 +136,24 @@ function setup(mode: "weapon" | "spell" | "summon" = "weapon") {
 }
 
 describe("effective damage: independent arithmetic and boundaries", () => {
+  it("adds Battle Command flat passive AR before percentage bonuses without mutating the weapon", () => {
+    const {profile,weapon,run} = setup();
+    weapon.attackRatingPercent = 100;
+    weapon.skillBonuses = Array.from({length:8}, (_, i) => ({baseAttackRating:i * 10, pierce:emptyCombatResistances(), gearIAS:0, crushingBlow:0, crushingEfficiency:0, openWounds:0, openWoundsDps:0}));
+    profile.activeAuras = [{name:"Battle Command",level:20,carrier:"party",source:"manual"}];
+    expect(run().attackRating).toBe(2060);
+    expect(weapon.baseAttackRating).toBe(1000);
+  });
+
+  it("includes beta maps beyond the old ID boundary and omits empty guild halls", () => {
+    const catalog = getCombatCatalog();
+    for (const id of ["207", "208", "209", "210"]) {
+      const area = catalog.areas.find((a) => a.id === id)!;
+      expect(area.map).toBe(true);
+      expect(area.monsters[2].length).toBeGreaterThan(0);
+    }
+    expect(catalog.areas.some((a) => ["202","203","204","205","206"].includes(a.id))).toBe(false);
+  });
   it("keeps the browser and API model and contracts byte-identical for isolated Docker builds", () => {
     for (const file of ["utils/effective-damage.ts", "types/combat.ts"])
       expect(

@@ -66,7 +66,7 @@ export function EffectiveDamageSection({
   );
   const [detailId, setDetailId] = useState<string | null>(null);
   const catalog = useQuery({
-    queryKey: ["damage-targets", "season-14-v1"],
+    queryKey: ["damage-targets", "season-14-v2"],
     queryFn: () => apiClient.get<CombatCatalog>("/damage-targets"),
     enabled: mode !== "none",
     staleTime: Infinity,

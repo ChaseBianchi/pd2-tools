@@ -37,6 +37,7 @@ export interface CombatCatalog {
 export interface CombatWeapon {
   hands?: CombatWeapon[];
   skillBonuses?: Array<{
+    baseAttackRating?: number;
     pierce: CombatResistances;
     gearIAS: number;
     crushingBlow: number;

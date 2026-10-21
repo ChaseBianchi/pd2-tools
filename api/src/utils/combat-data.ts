@@ -97,7 +97,9 @@ export function getCombatCatalog(): CombatCatalog {
     .map((row) => ({
       id: row.Id,
       name: names[row.LevelName] || row.LevelName || row.Name,
-      map: Number(row.Id) >= 138 && Number(row.Id) <= 201,
+      map:
+        (Number(row.Id) >= 138 && Number(row.Id) <= 201) ||
+        row.Name.endsWith(" Map"),
       levels: [1, 2, 3].map((i) => Number(row[`MonLvl${i}Ex`]) || 1),
       monsters: ["mon", "nmon", "nmon"].map((prefix) => [
         ...new Set(

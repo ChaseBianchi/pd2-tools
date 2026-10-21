@@ -1,5 +1,7 @@
 # Effective damage against monsters and areas
 
+> **October 21 beta update:** the committed tables and generated catalogs now come from the installed beta, replacing the provisional snapshot described in this report's original source/validation sections. See [SOURCE_MANIFEST.json](SOURCE_MANIFEST.json), [README.md](README.md) and [BETA_VALIDATION.md](BETA_VALIDATION.md) for current provenance and fresh results. October 16 counts and CSVs below are historical. The model rules and runtime limitations continue to apply; beta Fire Claws ground fire uses its explicit SkillDesc 5/2 display convention. Spirit of Barbs now uses owner hard points for the extra Deadly Strike cap.
+
 The full damage calculator keeps its original raw profile visible and adds a separate target comparison. Selecting a monster, difficulty, area, or modifier must never change the original skill components, strike bonuses, or raw totals. The component table shows the same pre-target values beside their adjusted values. Matching damage-to-demons/undead bonuses are added before resistance, so adjusted weapon damage can exceed the original raw value.
 
 ## Source and reproducibility

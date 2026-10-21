@@ -1,0 +1,99 @@
+{
+  "snapshot": "Season 14 installed beta",
+  "extractedOn": "2026-10-21",
+  "sourceDirectory": "ProjectD2 (active installation; same pd2data.mpq as Live)",
+  "normalization": "SHA-256 of UTF-8 text after CRLF to LF conversion; no cell edits",
+  "archives": {
+    "pd2data.mpq": "666c4e90930b7f234777c69a2daa1294f7646b98a530327ccf58a3a9019ec39e",
+    "pd2assets.mpq": "2ceb83ca8e9f482fa46a94cda95d2ab80f8415a0d2c1047a44f64d4a95cf56af",
+    "D2Common.dll": "59fa5928522f566f2bf99675571206ad70df889c89d3d07fa87edf5083e06e10",
+    "ProjectDiablo.dll": "17d5fb1b049d8076226d27295487b49c8b5f2629553c193a01aa1e3d8afaba57"
+  },
+  "files": {
+    "Armor.txt": {
+      "sha256": "9e389a678885443d92a3eb978667eb08733e66c285ecb81d636d0ac6295caad2",
+      "source": "pd2data.mpq",
+      "rows": 205,
+      "columns": 164,
+      "extractedSha256": "854704bd51730fa9830c46d97866e432c4127d6bb24e6e8b78e63d84fe166bee"
+    },
+    "CharStats.txt": {
+      "sha256": "3a750f260cd4f700b8f8d394435c5dddcddb2119271c7a6f211d57574ce23551",
+      "source": "pd2data.mpq",
+      "rows": 8,
+      "columns": 79,
+      "extractedSha256": "71426143e2691ad0cf9c642160db4ae81e1cfab332e37d66dd2467c0c8b1b2b4"
+    },
+    "CombatAnimations.json": {
+      "sha256": "23889021da11f07d71cf1ec88145c411ade7743e0bf591339e1d0f64d0aff44c",
+      "source": "generated from pd2assets.mpq AnimData + D2Common.dll"
+    },
+    "ItemStatCost.txt": {
+      "sha256": "141b59739a30b8883e74245761f72640c0b385ec673dafb23835b58db2dc4690",
+      "source": "pd2data.mpq",
+      "rows": 511,
+      "columns": 59,
+      "extractedSha256": "d6230a83a38d9f24fa9e7803d0f0695a9b298689cf418db3cabb3e168055063f"
+    },
+    "Levels.txt": {
+      "sha256": "c476673b141280b815ddadba695da5b16b989d04033f1ac0eabbe5a7abffb63c",
+      "source": "pd2data.mpq",
+      "rows": 212,
+      "columns": 185,
+      "extractedSha256": "39e53a003b5c6578247db0ce4aa03fa30dd5a6fe880c20c50525596fd40bb26c"
+    },
+    "Missiles.txt": {
+      "sha256": "4b1d66c2714bd3b5b850edebd24da9687c1bfec4717e11473508af4d46ce45fd",
+      "source": "pd2data.mpq",
+      "rows": 1063,
+      "columns": 171,
+      "extractedSha256": "81a7b2b01dcada71dba61ed91d393015f2b6a855e3a295c1170da43866d0f880"
+    },
+    "MonLvl.txt": {
+      "sha256": "7624abe33673f8bf4f243de141fb387a1d78f1192466ace49ac8b3c175fa4df8",
+      "source": "pd2data.mpq",
+      "rows": 111,
+      "columns": 31,
+      "extractedSha256": "bda243efe1d1e9591f75b8cf97ac73f78ff691362381f35cc000233eb46c092a"
+    },
+    "MonStats.txt": {
+      "sha256": "cb84eec69496ad619ea7dbced9d7df39cb10e39377cc12da7955e8f169380730",
+      "source": "pd2data.mpq",
+      "rows": 1284,
+      "columns": 255,
+      "extractedSha256": "b743cc0040ee1646c05ee9e7c83be647f29e2e4c0a6ad43c465e36e6f4bdb8e4"
+    },
+    "Properties.txt": {
+      "sha256": "ad74c5439f6dd1c50fab99cbf9a9f804db405b40aab71c2fc94894e259cb0cb7",
+      "source": "pd2data.mpq",
+      "rows": 458,
+      "columns": 36,
+      "extractedSha256": "1307fb24f8702e00d48bcd82d385206055294485b0395817cff0a0cecff7ebe9"
+    },
+    "SkillDesc.txt": {
+      "sha256": "09707004e0e359a6ee29147b4b2e5cc230cbc3520de36e8dd074ffe21a974073",
+      "source": "pd2data.mpq",
+      "rows": 262,
+      "columns": 118,
+      "extractedSha256": "f11f70872d61936090e77c33382ed0c2cb1f984d9e6509bce081fe2a9f4178a3"
+    },
+    "Skills.txt": {
+      "sha256": "61101c481003ee73c3bc9683f78ffcb97aa65a4cb5e48e89091d185110ad0b51",
+      "source": "pd2data.mpq",
+      "rows": 610,
+      "columns": 256,
+      "extractedSha256": "0bf4da2418f1c5df5acf47e410f927bc1a036f69e0edbbf1ea4c74d4b21b0f8b"
+    },
+    "TargetNames.json": {
+      "sha256": "b69b5d893f092689b2b3f5c44678be194dc08a4a234e9b6f40cf9c9c5c7c0683",
+      "source": "generated from base, expansion and pd2data.mpq English string tables"
+    },
+    "Weapons.txt": {
+      "sha256": "d2688013ad60f3466d5bd57c827b242a1e8972a176d2f6b106bcc9eae968770c",
+      "source": "pd2data.mpq",
+      "rows": 320,
+      "columns": 175,
+      "extractedSha256": "a62716b22aae91f86a79f60955a08705288df521cb17b00d622f05961446e9ae"
+    }
+  }
+}

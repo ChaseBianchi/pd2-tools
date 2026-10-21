@@ -1,5 +1,7 @@
 # Season 14 damage validation — 2026-10-16
 
+> Historical validation of the provisional patch. The October 21 installed beta supersedes these source values. See [BETA_VALIDATION.md](BETA_VALIDATION.md) for current results; this report and `validation-skills.csv` remain evidence for the earlier implementation.
+
 This validates the tentative table snapshot described in [README.md](README.md), the calculator, and the rendered UI. It does not establish agreement with the unreleased game engine.
 
 ## Data and isolation

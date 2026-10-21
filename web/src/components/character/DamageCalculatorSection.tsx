@@ -721,6 +721,20 @@ function getDamageModelDisplayNotes(
     notes.push("Critical Strike and Deadly Strike do not apply to Smite.");
   }
 
+  if (profile.skillName === "Fire Claws") {
+    notes.push(profile.damageScope.note);
+  }
+
+  if (
+    profile.activeAuras.some(
+      (a) => a.name === "Spirit of Barbs" && a.carrier === "party"
+    )
+  ) {
+    notes.push(
+      "Spirit of Barbs' extra Deadly Strike cap depends on its owner's hard points. Party hard points are unavailable, so that extra cap is omitted."
+    );
+  }
+
   if (profile.skillDamageMode === "summon") {
     notes.push(
       "Summon and trap totals are for one modeled hit or projectile; count, AI, uptime, and attack rate are not included."
