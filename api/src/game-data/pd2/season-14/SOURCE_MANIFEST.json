@@ -1,6 +1,8 @@
 {
   "snapshot": "Season 14 installed beta",
   "extractedOn": "2026-10-21",
+  "reverifiedOn": "2026-10-22",
+  "reverification": "Fresh extraction after the reported patch update: all 15 committed text tables are byte-identical; generated names/animations are content-identical; active and Live archives/DLLs match the launcher's current local checksums; all 57735 compiled monster comparisons pass again.",
   "sourceDirectory": "ProjectD2 (active installation; same pd2data.mpq as Live)",
   "normalization": "SHA-256 of UTF-8 text after CRLF to LF conversion; no cell edits",
   "archives": {
