@@ -1,6 +1,7 @@
 import type { DamageElement, DamageRange } from "./damage";
 export type CombatResistances = Record<DamageElement, number>;
 export interface CombatMonster {
+  target?: import("./damage-target").MonsterTarget;
   id: string;
   name: string;
   demon: boolean;
@@ -92,6 +93,8 @@ export interface CombatAuraLevel {
   reductions: CombatResistances;
 }
 export interface DamageCombatData {
+  commandSelfBonuses?: number[];
+  commandPartyBonuses?: number[];
   auraPulses?: Record<
     "primary" | "secondary",
     Record<string, Partial<Record<DamageElement, DamageRange>>[]>
@@ -104,6 +107,8 @@ export interface DamageCombatData {
   effects: Record<string, CombatAuraLevel[]>;
 }
 export interface CombatSettings {
+  protected?: boolean;
+  immunityAura?: boolean;
   mapBoss: boolean;
   attackSlow: number;
   castSlow: number;
@@ -150,5 +155,6 @@ export interface EffectiveCombatResult {
     landed: DamageRange;
     multiplier: number;
   }>;
+  absorptionHealing?: DamageRange;
   notes: string[];
 }

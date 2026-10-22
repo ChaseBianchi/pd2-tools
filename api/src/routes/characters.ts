@@ -14,6 +14,7 @@ import { calculateTotalSkills } from "../utils/skill-calculator";
 import { CharacterResponse, CharacterData } from "../types";
 import fetch from "node-fetch";
 import { calculateDamage } from "../utils/damage-calculator";
+import { getCombatCatalog } from "../utils/combat-data";
 import { enrichArmoryPayload } from "../utils/armory-payload";
 
 const logger = mainLogger.createNamedLogger("API");
@@ -162,6 +163,17 @@ router.get(
     }
   }
 );
+
+// Calculator target data is independent of the character ladder season.
+router.get("/damage-targets", (_req: Request, res: Response) => {
+  try {
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.json(getCombatCatalog());
+  } catch (error) {
+    logger.error("Error loading damage targets", { error: error instanceof Error ? error.message : String(error) });
+    res.status(500).json({ error: { message: "Failed to load damage targets" } });
+  }
+});
 
 // GET /api/characters/:name - Get character by name
 router.get(

@@ -1,4 +1,5 @@
 import { CharacterResponse, SkillDefinition, SkillBonus } from "../types";
+import { isActivePlayerItem } from "./active-item";
 
 class D2SkillParser {
   private readonly debug: boolean;
@@ -1334,10 +1335,7 @@ class D2SkillParser {
 
     // Process all items
     characterData.items.forEach((item, index) => {
-      if (
-        item.location.equipment === "Left Hand Switch" ||
-        item.location.equipment === "Right Hand Switch"
-      ) {
+      if (!isActivePlayerItem(item)) {
         return;
       }
       this.log(`Processing item #${index + 1}`);

@@ -30,6 +30,8 @@ import {
   applyStrikeModifierDelta,
   rebuildStrikeDamageComponents,
   rescalePhysicalComponents,
+  selectPrecomputedAuraProfileIndex,
+  getCarriedDamageDelta,
 } from "../../utils/damage-profile-adjustments";
 import { STAT_COLORS } from "./stat-colors";
 
@@ -482,27 +484,6 @@ function getAuraLevelBonus(
   );
 }
 
-function getAuraBonusScore(
-  bonus: DamageAuraOption["levelBonuses"][number]
-): number {
-  const elementalScore = DAMAGE_ELEMENTS.reduce((total, element) => {
-    const range = bonus.elementalDamage[element];
-    return total + (range ? (range.min + range.max) / 2 : 0);
-  }, 0);
-  const poisonScore = bonus.poisonDamage?.total ?? 0;
-  const strikeScore = Object.values(
-    bonus.strikeModifiers ?? EMPTY_STRIKE_MODIFIERS
-  ).reduce((total, value) => total + Math.abs(value), 0);
-
-  return (
-    bonus.skillLevelBonus * 1000000 +
-    bonus.physicalBonusPercent * 1000 +
-    strikeScore * 1000 +
-    elementalScore +
-    poisonScore
-  );
-}
-
 function getResolvedAuraLevel(
   auraOption: DamageAuraOption,
   level: string | null,
@@ -552,6 +533,14 @@ export function findPrecomputedAuraProfile(
               getAuraLevelBonus(auraOption, numericLevel, isParty)
                 .skillLevelBonus)) &&
         profile.transformationId === "none"
+    ) ?? damageCalculation.profiles.find((profile) =>
+      profile.weaponId === weaponId && profile.skillId === skillId &&
+      profileMatchesChargeSelection(profile, skillOption, chargeNumber) &&
+      profile.playerAuraId === auraOption.id && profile.playerAuraCarrier === carrier &&
+      profile.transformationId === "none" && profile.playerAuraLevel <= numericLevel &&
+      getAuraLevelBonus(auraOption, numericLevel, isParty).skillLevelBonus > 0 &&
+      getAuraLevelBonus(auraOption, profile.playerAuraLevel, isParty).skillLevelBonus ===
+        getAuraLevelBonus(auraOption, numericLevel, isParty).skillLevelBonus
     ) ?? null
   );
 }
@@ -570,15 +559,15 @@ function canUsePrecomputedAuraProfile(
 
 function getElementalDelta(
   next: DamageProfile["totalElementalDamage"],
-  previous: DamageProfile["totalElementalDamage"]
+  previous: DamageProfile["totalElementalDamage"],
+  multiplier: number
 ): DamageProfile["totalElementalDamage"] {
   const delta: DamageProfile["totalElementalDamage"] = {};
 
   DAMAGE_ELEMENTS.forEach((element) => {
     const nextRange = next[element];
     const previousRange = previous[element];
-    const min = (nextRange?.min || 0) - (previousRange?.min || 0);
-    const max = (nextRange?.max || 0) - (previousRange?.max || 0);
+    const { min, max } = getCarriedDamageDelta(nextRange || createEmptyRange(), previousRange, multiplier);
 
     if (min || max) {
       delta[element] = { min, max };
@@ -590,21 +579,21 @@ function getElementalDelta(
 
 function getPoisonDelta(
   next: DamageAuraOption["levelBonuses"][number]["poisonDamage"],
-  previous: DamageAuraOption["levelBonuses"][number]["poisonDamage"]
+  previous: DamageAuraOption["levelBonuses"][number]["poisonDamage"],
+  multiplier: number
 ): DamageAuraOption["levelBonuses"][number]["poisonDamage"] | undefined {
   if (!next) {
     return undefined;
   }
 
-  const min = next.damage.min - (previous?.damage.min || 0);
-  const max = next.damage.max - (previous?.damage.max || 0);
+  const { min, max } = getCarriedDamageDelta(next.damage, previous?.damage, multiplier);
   if (min <= 0 && max <= 0) {
     return undefined;
   }
 
   return {
     damage: { min, max },
-    total: Math.max(0, next.total - (previous?.total || 0)),
+    total: Math.max(0, Math.floor(next.total * multiplier) - Math.floor((previous?.total || 0) * multiplier)),
     durationSeconds: next.durationSeconds,
   };
 }
@@ -1225,8 +1214,19 @@ export function applyAuraToProfile(
     auraAppliesAsParty,
     source
   );
+  const existingAura = profile.activeAuras.find(
+    (activeAura) => activeAura.name === auraOption.name
+  );
+  const existingBonus = existingAura
+    ? getAuraLevelBonus(
+        auraOption,
+        existingAura.level,
+        existingAura.carrier === "party",
+        profile.weaponId, existingAura.source, profile.skillDamageMode === "summon"
+      )
+    : getAuraLevelBonus(null, null);
   const skillLevelNote =
-    selectedBonus.skillLevelBonus > 0
+    selectedBonus.skillLevelBonus > existingBonus.skillLevelBonus
       ? [
           `Selected aura all-skills bonus (+${selectedBonus.skillLevelBonus}) requires a precomputed profile`,
           "to update skill damage at this level.",
@@ -1243,19 +1243,6 @@ export function applyAuraToProfile(
     ...profile.notes,
     ...noteAdditions.filter((note) => !profile.notes.includes(note)),
   ];
-  const existingAura = profile.activeAuras.find(
-    (activeAura) => activeAura.name === auraOption.name
-  );
-  const existingBonus = existingAura
-    ? getAuraLevelBonus(
-        auraOption,
-        existingAura.level,
-        existingAura.carrier === "party",
-        profile.weaponId,
-        existingAura.source,
-        profile.skillDamageMode === "summon"
-      )
-    : getAuraLevelBonus(null, null);
   const existingAuraIsStronger =
     !replaceExistingAura &&
     Boolean(existingAura) &&
@@ -1289,13 +1276,16 @@ export function applyAuraToProfile(
 
   const physicalBonusDelta =
     nextBonus.physicalBonusPercent - existingBonus.physicalBonusPercent;
+  const attackDamageMultiplier = profile.attackDamageMultiplier ?? 1;
   const elementalDelta = getElementalDelta(
     nextBonus.elementalDamage,
-    existingBonus.elementalDamage
+    existingBonus.elementalDamage,
+    attackDamageMultiplier
   );
   const poisonDelta = getPoisonDelta(
     nextBonus.poisonDamage,
-    existingBonus.poisonDamage
+    existingBonus.poisonDamage,
+    attackDamageMultiplier
   );
   const previousTotalBonus = profile.breakdown.physicalBonusPercent.total;
   const nextTotalBonus = previousTotalBonus + physicalBonusDelta;
@@ -1308,8 +1298,7 @@ export function applyAuraToProfile(
     if (!hasRange(damage)) {
       return [];
     }
-    const sequenceDamage =
-      sequenceHitCount > 1 ? scaleRange(damage, sequenceHitCount) : damage;
+    const sequenceDamage = scaleRange(damage, sequenceHitCount);
 
     return [
       {
@@ -1852,10 +1841,20 @@ export function DamageCalculatorSection({
       new Map(
         damageCalculation?.playerAuraOptions.map((auraOption) => [
           auraOption.id,
-          auraOption,
+          {
+            ...auraOption,
+            selfLevelBonuses: auraOption.selfLevelBonusesByWeaponSet?.[
+              selectedWeaponOption?.weaponSet || "primary"
+            ] || auraOption.selfLevelBonuses,
+            partyLevelBonuses: selectedSkillOption?.damageMode === "summon"
+              ? auraOption.summonLevelBonusesByWeaponSet?.[
+                  selectedWeaponOption?.weaponSet || "primary"
+                ] || auraOption.partyLevelBonuses
+              : auraOption.partyLevelBonuses,
+          },
         ]) ?? []
       ),
-    [damageCalculation]
+    [damageCalculation, selectedWeaponOption?.weaponSet, selectedSkillOption?.damageMode]
   );
 
   const selectedAuraRows = useMemo(
@@ -2098,37 +2097,29 @@ export function DamageCalculatorSection({
 
     const normalizedBaseProfile = normalizeDamageProfile(baseProfile);
     const effectiveAuraRows = isCompact ? [] : selectedAuraRows;
-    const skillLevelAuraProfileIndex = effectiveAuraRows.findIndex(
-      ({ row, auraOption }) =>
-        canUsePrecomputedAuraProfile(row, auraOption) &&
-        getAuraLevelBonus(
+    const precomputedAuraProfileIndex = selectPrecomputedAuraProfileIndex(effectiveAuraRows.map(
+      ({ row, auraOption }) => {
+        if (!canUsePrecomputedAuraProfile(row, auraOption)) {
+          return { profile: null, skillLevelBonus: 0 };
+        }
+
+        const auraAppliesAsParty =
+          row.isParty || normalizedBaseProfile.skillDamageMode === "summon";
+        const selectedBonus = getAuraLevelBonus(
           auraOption,
           row.level,
-          row.isParty || normalizedBaseProfile.skillDamageMode === "summon"
-        ).skillLevelBonus > 0
-    );
-    const precomputedAuraProfileIndex =
-      skillLevelAuraProfileIndex >= 0
-        ? skillLevelAuraProfileIndex
-        : effectiveAuraRows.findIndex(({ row, auraOption }) => {
-            if (!canUsePrecomputedAuraProfile(row, auraOption)) {
-              return false;
-            }
+          auraAppliesAsParty
+        );
 
-            const auraAppliesAsParty =
-              row.isParty || normalizedBaseProfile.skillDamageMode === "summon";
-            const selectedBonus = getAuraLevelBonus(
-              auraOption,
-              row.level,
-              auraAppliesAsParty
-            );
-
-            return (
-              selectedBonus.skillLevelBonus > 0 ||
-              selectedBonus.physicalBonusPercent !== 0 ||
-              getAuraBonusScore(selectedBonus) > 0
-            );
-          });
+        return {
+          profile: findPrecomputedAuraProfile(
+            damageCalculation, weaponId, skillId, selectedSkillOption,
+            selectedChargeNumber, auraOption, auraAppliesAsParty, row.level
+          ),
+          skillLevelBonus: selectedBonus.skillLevelBonus,
+        };
+      }
+    ));
     const precomputedAuraProfileRow =
       precomputedAuraProfileIndex >= 0
         ? effectiveAuraRows[precomputedAuraProfileIndex]
@@ -2148,11 +2139,12 @@ export function DamageCalculatorSection({
       : null;
     const auraBaseProfile = precomputedAuraProfile
       ? (() => {
-          let normalizedProfile = normalizeDamageProfile(
-            precomputedAuraProfile
-          );
           const row = precomputedAuraProfileRow!.row;
           const auraOption = precomputedAuraProfileRow!.auraOption;
+          let normalizedProfile = applyAuraToProfile(
+            normalizeDamageProfile(precomputedAuraProfile), auraOption,
+            row.isParty, row.level, row.source
+          );
           const auraAppliesAsParty =
             row.isParty || normalizedBaseProfile.skillDamageMode === "summon";
           if (normalizedProfile.playerAuraLevel !== Number(row.level)) {

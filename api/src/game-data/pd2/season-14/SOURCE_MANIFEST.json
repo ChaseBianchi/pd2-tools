@@ -85,7 +85,7 @@
       "extractedSha256": "0bf4da2418f1c5df5acf47e410f927bc1a036f69e0edbbf1ea4c74d4b21b0f8b"
     },
     "TargetNames.json": {
-      "sha256": "b69b5d893f092689b2b3f5c44678be194dc08a4a234e9b6f40cf9c9c5c7c0683",
+      "sha256": "65c13f6a990b7d13a9c5e824c5f909d2369620df5dd909a20664dfa2bcc6599f",
       "source": "generated from base, expansion and pd2data.mpq English string tables"
     },
     "Weapons.txt": {
@@ -94,6 +94,43 @@
       "rows": 320,
       "columns": 175,
       "extractedSha256": "a62716b22aae91f86a79f60955a08705288df521cb17b00d622f05961446e9ae"
+    },
+    "MonStats2.txt": {
+      "sha256": "f5182ae1f455006bf4fa90eeb00de7df73833bfcf6669b93c76e340020668abb",
+      "source": "pd2data.mpq",
+      "rows": 741,
+      "columns": 126,
+      "extractedSha256": "029650b77a73073b3f1d66a9a90c78da1c4822d196bdd93b6fd73d5f28f94d3b"
+    },
+    "MonProp.txt": {
+      "sha256": "e7f8e3574faf7bddf99885945b2c96cfbb9d7a2be7c67de8b85920e91c3e543a",
+      "source": "pd2data.mpq",
+      "rows": 67,
+      "columns": 92,
+      "extractedSha256": "907a74dbafa2140bbde48c1fdefee6a30befc46e2bfe1db6e383b54ef573727e"
+    },
+    "MonPreset.txt": {
+      "sha256": "4d2c2bcb984f1041abbd56054b2e6a954f91e74abc21308d46eb9da19219f5f6",
+      "source": "pd2data.mpq",
+      "rows": 324,
+      "columns": 2,
+      "extractedSha256": "a99ed04f9268144f184e19d58394f745a348ac0e1287b79927bc5e5a3097fee8"
+    },
+    "SuperUniques.txt": {
+      "sha256": "fedaa063116a0bb9d14e9d8c39106bb21178f7ed68ad204495ed35063c3964d6",
+      "source": "pd2data.mpq",
+      "rows": 68,
+      "columns": 21,
+      "extractedSha256": "1b9b8a3b949f03d2d08b94f46dc7fed5a00b27fee90fe89b9ecf428ee80ada48"
     }
+  },
+  "compiledValidation": {
+    "file": "data/global/excel/MonStats.bin",
+    "source": "pd2data.mpq",
+    "sha256": "973235e1e8103a16f43b755a09b43d217a110bf4700f990bae664bd61b7c4a44",
+    "records": 1283,
+    "recordBytes": 424,
+    "comparedValues": 57735,
+    "mismatches": 0
   }
 }

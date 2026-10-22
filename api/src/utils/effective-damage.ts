@@ -1,3 +1,5 @@
+import { calculateTargetDamage, EMPTY_TARGET_CONDITIONS, getEffectiveResistance } from "./target-damage";
+import type { MonsterTarget, MonsterTargetStats } from "../types/damage-target";
 import type {
   DamageProfile,
   DamageRange,
@@ -66,16 +68,7 @@ export function effectiveResistance(
   breakers: number[],
   pierce: number
 ): number {
-  let value =
-    base -
-    breakers.reduce(
-      (sum, amount) =>
-        sum + Math.trunc(Math.max(0, amount) / (base >= 100 ? 2 : 1)),
-      0
-    );
-  if (value >= 100) return value;
-  value -= Math.max(0, pierce);
-  return Math.max(-100, value < 0 ? Math.trunc(value / 2) : value);
+  return getEffectiveResistance(base, breakers, pierce);
 }
 
 // PD2 replaces the vanilla 95% cap: its 111% AR ratio and diminished excess can reach 100%.
@@ -426,8 +419,11 @@ export function calculateEffectiveDamage(
     },
     new Map<string, number>()
   );
-  const command = active.get("Battle Command"),
-    allSkills = command ? Math.min(7, 1 + Math.floor(command / 10)) : 0;
+  const command = profile.activeAuras.find((aura) => aura.name === "Battle Command");
+  const commandOption = command?.carrier === "self"
+    ? combat.commandSelfBonuses : combat.commandPartyBonuses;
+  const allSkills = command ? commandOption?.[Math.min(80, command.level)] ??
+    Math.min(7, 1 + Math.floor(command.level / 10)) : 0;
   const boostedWeapon = (
     w: DamageCombatData["weapons"][string]
   ): DamageCombatData["weapons"][string] => {
@@ -480,17 +476,28 @@ export function calculateEffectiveDamage(
   const effects = [...active]
     .map(([name, level]) => combat.effects[name]?.[Math.min(80, level)])
     .filter((e) => Boolean(e));
-  const reductions = (element: DamageElement) => {
-    const amounts = [...active].map(([name, level]) => {
-      const value =
-        combat.effects[name]?.[Math.min(80, level)]?.reductions[element] || 0;
-      return name === profile.skillName
-        ? Math.max(value, skill?.reductions[element] || 0)
-        : value;
-    });
-    if (!active.has(profile.skillName))
-      amounts.push(skill?.reductions[element] || 0);
-    return amounts;
+  const effectReduction = (name: string, element: DamageElement) => {
+    const level = active.get(name) || 0;
+    const value = level ? combat.effects[name]?.[Math.min(80, level)]?.reductions[element] || 0 : 0;
+    return name === (profile.sourceSkillName || profile.skillName)
+      ? Math.max(value, skill?.reductions[element] || 0) : value;
+  };
+  const convictionLevel = Math.max(profile.targetModifiers?.convictionLevel || 0, active.get("Conviction") || 0);
+  const conditions = {
+    ...EMPTY_TARGET_CONDITIONS,
+    conviction: Math.max(effectReduction("Conviction", "fire"), convictionLevel ? Math.min(150, 10 + 2 * convictionLevel) : 0),
+    lowerResist: effectReduction("Lower Resist", "fire"),
+    amplifyDamage: effectReduction("Amplify Damage", "physical"),
+    battleCry: effectReduction("Battle Cry", "physical"),
+    decrepify: effectReduction("Decrepify", "physical"),
+    sanctuary: effectReduction("Sanctuary", "magic"),
+    staticField: effectReduction("Static Field", "lightning"),
+    inferno: effectReduction("Inferno", "fire"),
+    arcticBlast: effectReduction("Arctic Blast", "cold"),
+    plaguePoppy: Math.max(effectReduction("Poison Creeper", "poison"), effectReduction("Plague Poppy", "poison")),
+    addedResistances: settings.resistanceBonus,
+    protected: Boolean(settings.protected && !area),
+    immunityAura: Boolean(settings.immunityAura && !area),
   };
   const raw = profile.damageComponents
     .filter((c) => c.includedInTotal !== false)
@@ -570,28 +577,25 @@ export function calculateEffectiveDamage(
       elements.forEach((e) => {
         pierce[e] += skill?.pierce[e] || 0;
       });
-    const resistances = Object.fromEntries(
-      elements.map((e) => [
-        e,
-        effectiveResistance(
-          monster.resistances[difficulty][e] + settings.resistanceBonus[e],
-          reductions(e),
-          pierce[e]
-        ),
-      ])
-    ) as CombatResistances;
-    const woundPhysicalResistance = resistances.physical;
-    const sanctuaryBypass =
-      monster.undead &&
-      !monster.boss &&
-      !monster.primeEvil &&
-      !settings.mapBoss &&
-      profile.skillDamageMode !== "summon" &&
-      profile.activeAuras.some(
-        (a) => a.name === "Sanctuary" && a.carrier === "self" && a.level > 0
-      );
-    if (sanctuaryBypass)
-      resistances.physical = Math.min(0, resistances.physical);
+    const stats: MonsterTargetStats = monster.target?.difficulties[["normal", "nightmare", "hell"][difficulty] as "hell"] || {
+      resistances: monster.resistances[difficulty], poisonLengthReduction: 0, curseResistance: 0,
+      curseEffectReduction: 0, receivesImmunityAura: false, flatPhysicalReduction: 0, flatMagicReduction: 0,
+      absorbPercent: {}, absorbFlat: {}, block: monster.block[difficulty], notes: [],
+    };
+    const target = monster.target || { id: monster.id, creatureType: monster.demon ? "demon" : monster.undead ? "undead" : "other" } as MonsterTarget;
+    const sanctuaryBypass = monster.undead && !monster.boss && !monster.primeEvil && !settings.mapBoss &&
+      profile.skillDamageMode !== "summon" && profile.activeAuras.some((aura) => aura.name === "Sanctuary" && aura.carrier === "self" && aura.level > 0);
+    const activeConditions = { ...conditions, physicalBypass: sanctuaryBypass };
+    const reductions = (element: DamageElement) => {
+      const curse = (value: number) => stats.curseResistance >= 100 ? 0 : Math.floor(value * (100 - Math.min(100, stats.curseEffectReduction)) / 100);
+      return element === "physical" ? [conditions.battleCry, curse(conditions.amplifyDamage), curse(conditions.decrepify)]
+        : element === "magic" ? [conditions.sanctuary]
+          : [element === "poison" ? 0 : conditions.conviction, curse(conditions.lowerResist),
+            element === "fire" ? conditions.inferno : element === "cold" ? conditions.arcticBlast : element === "lightning" ? conditions.staticField : conditions.plaguePoppy];
+    };
+    const basePhysicalResistance = stats.resistances.physical + settings.resistanceBonus.physical +
+      (stats.receivesImmunityAura && conditions.immunityAura ? 200 : 0);
+    const woundPhysicalResistance = effectiveResistance(basePhysicalResistance, reductions("physical"), profile.targetModifiers?.resistancePierce.physical ?? pierce.physical);
     const hands = weapon?.hands || (weapon ? [weapon] : []);
     const hitData = hands.map((hand) => {
       let ar =
@@ -645,113 +649,44 @@ export function calculateEffectiveDamage(
                     100),
       };
     });
-    const physicalById = new Map<string, DamageRange>();
-    const inputs = profile.damageComponents.map((component) => {
-      const index = component.id.startsWith("sequence:2:") ? 1 : 0,
-        hand = hands[index] || weapon;
-      const bonus =
-        (monster.demon ? hand?.demonDamage || 0 : 0) +
-        (monster.undead ? hand?.undeadDamage || 0 : 0);
-      let damage = component.damage;
-      if (
-        component.damageType === "physical" &&
-        component.timing === "instant" &&
-        profile.skillDamageMode === "weapon" &&
-        bonus
-      ) {
-        const previous =
-          component.physicalBonusPercent ??
-          profile.breakdown.physicalBonusPercent.total;
-        const base =
-          component.baseDamage || scale(damage, 1 / (1 + previous / 100));
-        damage = {
-          min: Math.floor(base.min * (1 + (previous + bonus) / 100)),
-          max: Math.floor(base.max * (1 + (previous + bonus) / 100)),
-        };
-      }
-      physicalById.set(component.id, damage);
-      return { component, damage, index };
+    const damageComponents = profile.damageComponents.map((component) => {
+      const index = component.id.startsWith("sequence:2:") ? 1 : 0;
+      const hand = hands[index] || weapon;
+      return component.targetDamageBonuses || component.damageType !== "physical" || profile.skillName === "Smite" || profile.skillDamageMode !== "weapon"
+        ? component : { ...component,
+            baseDamage: component.baseDamage || scale(component.damage, 1 / (1 + (component.physicalBonusPercent ?? profile.breakdown.physicalBonusPercent.total) / 100)),
+            physicalBonusPercent: component.physicalBonusPercent ?? profile.breakdown.physicalBonusPercent.total,
+            targetDamageBonuses: { demon: hand?.demonDamage || 0, undead: hand?.undeadDamage || 0 } };
     });
-    let landed = zero(),
-      expected = zero(),
-      instant = 0,
-      dot = 0;
+    const targetProfile = { ...profile, damageComponents, targetModifiers: profile.targetModifiers || { resistancePierce: pierce, convictionLevel: 0 } };
+    const mitigation = calculateTargetDamage(targetProfile, target, stats, activeConditions);
+    const resistances = mitigation.resistances;
+    const landed = mitigation.totals.combinedDamage;
+    let expected = zero(), instant = 0, dot = 0;
     const components: EffectiveCombatResult["components"] = [];
-    inputs.forEach(({ component, damage, index }) => {
-      if (component.includedInTotal === false) return;
-      const element =
-        component.damageType === "critical" || component.damageType === "deadly"
-          ? "physical"
-          : component.damageType;
-      if (
-        component.damageType === "critical" ||
-        component.damageType === "deadly"
-      ) {
-        const strike = profile.strikeBreakdowns.find((s) =>
-          component.id.includes(s.id)
-        );
-        if (strike)
-          damage = scale(
-            strike.physicalComponentIds.reduce(
-              (sum, id) => add(sum, physicalById.get(id) || zero()),
-              zero()
-            ),
-            component.damageType === "critical"
-              ? (strike.criticalChance / 100) * (strike.criticalMultiplier - 1)
-              : (strike.effectiveDeadlyStrikeChance / 100) *
-                  (strike.deadlyStrikeMultiplier - 1)
-          );
-      }
-      const multiplier = Math.max(0, 1 - resistances[element] / 100),
-        adjusted = scale(damage, multiplier);
-      const hit =
-        hitData[index]?.hit ??
-        (profile.skillDamageMode === "spell"
-          ? settings.hitChanceOverride === null
-            ? 1
-            : clamp(settings.hitChanceOverride, 0, 100) / 100
-          : null);
-      landed = add(landed, adjusted);
-      expected = add(expected, scale(adjusted, hit ?? 1));
-      components.push({
-        id: component.id,
-        element,
-        raw: component.damage,
-        landed: adjusted,
-        multiplier,
-      });
-      if (component.timing === "instant")
-        instant += average(adjusted) * (hit ?? 1);
-      else if (component.poisonDamage?.durationSeconds) {
-        const duration = component.poisonDamage.durationSeconds;
-        dot +=
-          (average(adjusted) / duration) *
-          (timing.rate === null || hit === null
-            ? 1
-            : applicationCoverage(timing.rate, hit, duration));
-      } else dot += timing.rate === 0 ? 0 : average(adjusted) * (hit ?? 1); // Existing non-poison ground/stream payloads are already scaled per second.
-    });
-    const auraPulseDps = resolveAuraPulseComponents(profile, combat)
-      .filter((c) => c.includedInTotal !== false)
-      .reduce((sum, c) => {
-        const element =
-          c.damageType === "critical" || c.damageType === "deadly"
-            ? "physical"
-            : c.damageType;
-        const row = c.sourceRefs
-          .map((r) => r.row)
-          .find((r) => r && catalog.pulseRates[r]);
-        const owner = profile.activeAuras.find((a) => a.name === row);
-        if (owner?.carrier === "party") return sum;
-        return (
-          sum +
-          average(c.damage) *
-            Math.max(0, 1 - resistances[element] / 100) *
-            (row ? catalog.pulseRates[row] : 0) *
-            uptime *
-            count
-        );
-      }, 0);
+    const periodic = damageComponents.filter((component) => component.includedInTotal === false &&
+      component.timing === "over_time" && component.damageType !== "poison" && component.damageEventsPerUnit);
+    const periodicResult = periodic.length ? calculateTargetDamage({ ...targetProfile, damageComponents: periodic.map((component) => ({ ...component, includedInTotal: true })), strikeBreakdowns: [], auraPulseDamageComponents: [] }, target, stats, activeConditions) : undefined;
+    for (const event of [...(mitigation.events || []), ...(periodicResult?.events || [])]) {
+      const hit = hitData[event.hand]?.hit ?? (profile.skillDamageMode === "spell"
+        ? settings.hitChanceOverride === null ? 1 : clamp(settings.hitChanceOverride, 0, 100) / 100 : null);
+      const isPeriodic = periodic.some((component) => component.id === event.id);
+      if (!isPeriodic) expected = add(expected, scale(event.damage, hit ?? 1));
+      components.push({ id: event.id, element: event.element, raw: event.raw, landed: event.damage,
+        multiplier: Math.max(0, 1 - resistances[event.element] / 100) });
+      if (event.timing === "instant") instant += average(event.damage) * (hit ?? 1);
+      else if (event.durationSeconds !== undefined) {
+        const duration = event.durationSeconds;
+        dot += duration > 0 ? average(event.damage) / duration *
+          (timing.rate === null || hit === null ? 1 : applicationCoverage(timing.rate, hit, duration)) : 0;
+      } else dot += timing.rate === 0 ? 0 : average(event.damage) * (hit ?? 1);
+    }
+    const auraPulseDps = resolveAuraPulseComponents(profile, combat).filter((component) => component.includedInTotal !== false).reduce((sum, component) => {
+      const row = component.sourceRefs.map((ref) => ref.row).find((name) => name && catalog.pulseRates[name]);
+      if (profile.activeAuras.find((aura) => aura.name === row)?.carrier === "party") return sum;
+      const result = calculateTargetDamage({ ...targetProfile, damageComponents: [component], strikeBreakdowns: [], auraPulseDamageComponents: [] }, target, stats, { ...activeConditions, physicalBypass: false });
+      return sum + average(result.totals.combinedDamage) * (row ? catalog.pulseRates[row] : 0) * uptime * count;
+    }, 0);
     const hitChance =
       profile.skillDamageMode === "spell"
         ? settings.hitChanceOverride === null
@@ -775,9 +710,6 @@ export function calculateEffectiveDamage(
           ? 30
           : 70 + (100 - Math.trunc(hpPercent)) * 10
         : 8;
-      const basePhysicalResistance =
-        monster.resistances[difficulty].physical +
-        settings.resistanceBonus.physical;
       const cbResistance =
         basePhysicalResistance -
         reductions("physical").reduce(
@@ -866,10 +798,13 @@ export function calculateEffectiveDamage(
         ? ((stacks * weightedDamage) / weight) * uptime
         : 0;
     }
-    const notes = [timing.note];
+    if (conditions.protected) { crushingDps = 0; openWoundsDps = 0; }
+    const notes = [timing.note, ...(monster.target?.notes || []), ...stats.notes];
+    if (mitigation.absorptionHealing.max > 0) notes.push(`Absorption can additionally heal up to ${mitigation.absorptionHealing.max.toFixed(1)} life per modeled payload before damage, depending on missing life.`);
+    if (conditions.protected) notes.push("Target is in a protected phase; effective damage is zero.");
     if (profile.skillDamageMode === "summon")
       notes.push(
-        "Summon hit chance needs an observed override; caster attack rating and pierce are not inherited. For an unblockable summon payload, also set monster block override to zero."
+        "Summon hit chance needs an observed override; caster attack rating is not inherited. Source-backed pet pierce rules apply. For an unblockable summon payload, set monster block override to zero."
       );
     if (
       ["Corpse Explosion", "Death Sentry"].includes(
@@ -905,6 +840,7 @@ export function calculateEffectiveDamage(
       );
     return {
       monster,
+      absorptionHealing: mitigation.absorptionHealing,
       level,
       defense,
       life,

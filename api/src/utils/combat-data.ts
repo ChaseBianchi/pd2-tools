@@ -1,4 +1,5 @@
 import fs from "fs";
+import { getDamageTargetCatalog } from "./damage-targets";
 import path from "path";
 import type { CombatCatalog, CombatResistances } from "../types/combat";
 const directory = path.resolve(process.cwd(), "src/game-data/pd2/season-14");
@@ -91,7 +92,31 @@ export function getCombatCatalog(): CombatCatalog {
           ) as CombatResistances
       ),
     }));
-  const known = new Set(monsters.map((m) => m.id));
+  const curated = getDamageTargetCatalog();
+  const baseMonsters = new Map(monsters.map((monster) => [monster.id, monster]));
+  const curatedMonsters = curated.monsters.map((target) => {
+    const base = baseMonsters.get(target.monsterId)!;
+    const stats = [target.difficulties.normal, target.difficulties.nightmare, target.difficulties.hell];
+    return { ...base, id: target.id, name: target.name, target,
+      boss: base.boss || target.kind === "superunique",
+      block: stats.map((value) => value.block), resistances: stats.map((value) => value.resistances) };
+  });
+  const aliases = new Map<string, string>();
+  for (const target of curated.monsters) {
+    if (target.id === target.monsterId || !aliases.has(target.monsterId.toLowerCase()))
+      aliases.set(target.monsterId.toLowerCase(), target.id);
+  }
+  // Canonicalize excluded duplicate spawn IDs only when their entire defensive
+  // and timing/level profiles match a curated member with the same name.
+  for (const monster of monsters) {
+    if (aliases.has(monster.id.toLowerCase())) continue;
+    const equivalent = curatedMonsters.find((candidate) => candidate.name === monster.name && candidate.demon === monster.demon && candidate.undead === monster.undead &&
+      candidate.boss === monster.boss && candidate.primeEvil === monster.primeEvil && candidate.noRatio === monster.noRatio &&
+      JSON.stringify([candidate.levels,candidate.defense,candidate.life,candidate.resistances,candidate.block]) ===
+      JSON.stringify([monster.levels,monster.defense,monster.life,monster.resistances,monster.block]));
+    if (equivalent) aliases.set(monster.id.toLowerCase(), equivalent.id);
+  }
+  const known = new Set(curatedMonsters.map((m) => m.id));
   const areas = readCombatTable("Levels")
     .filter((row) => Number(row.Id) > 0)
     .map((row) => ({
@@ -103,15 +128,19 @@ export function getCombatCatalog(): CombatCatalog {
       levels: [1, 2, 3].map((i) => Number(row[`MonLvl${i}Ex`]) || 1),
       monsters: ["mon", "nmon", "nmon"].map((prefix) => [
         ...new Set(
-          Array.from({ length: 25 }, (_, i) => row[`${prefix}${i + 1}`]).filter(
-            (id) => known.has(id)
+          Array.from({ length: 25 }, (_, i) => aliases.get(row[`${prefix}${i + 1}`]?.toLowerCase())).filter(
+            (id): id is string => Boolean(id && known.has(id))
           )
         ),
       ]),
     }))
-    .filter((area) => area.monsters.some((list) => list.length));
+    .filter((area) => area.monsters.some((list) => list.length) && (!area.map || curated.maps.some((map) => map.id === area.id)));
+  for (const area of areas.filter((entry) => entry.map)) {
+    const map = curated.maps.find((entry) => entry.id === area.id);
+    if (map) area.monsters = [[], [], [...map.monsterIds]];
+  }
   catalog = {
-    monsters,
+    monsters: curatedMonsters,
     areas,
     ...animations,
     pulseRates: Object.fromEntries(

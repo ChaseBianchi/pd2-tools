@@ -1,5 +1,6 @@
 import { CharacterData, CharStats } from "../types";
 import { expandItemStats } from "./item-stat-expansion";
+import { isActivePlayerItem } from "./active-item";
 
 export default class CharacterStatParser {
   private character: CharacterData;
@@ -83,10 +84,7 @@ export default class CharacterStatParser {
 
   public parseAndGetCharStats(): CharStats {
     for (const item of this.character.items) {
-      if (
-        item.location.equipment === "Left Hand Switch" ||
-        item.location.equipment === "Right Hand Switch"
-      ) {
+      if (!isActivePlayerItem(item)) {
         continue;
       }
 

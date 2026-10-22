@@ -72,7 +72,7 @@ strings = {}
 for filename in ["string.tbl", "expansionstring.tbl", "patchstring.tbl"]:
     strings.update(read_strings(args.extract / filename))
 keys = set()
-for filename, column in [("MonStats.txt", "NameStr"), ("Levels.txt", "LevelName")]:
+for filename, column in [("MonStats.txt", "NameStr"), ("Levels.txt", "LevelName"), ("SuperUniques.txt", "Name")]:
     with (args.extract / filename).open(encoding="utf-8", newline="") as file:
         keys.update(row[column] for row in csv.DictReader(file, delimiter="\t") if row.get(column))
 args.output.mkdir(parents=True, exist_ok=True)

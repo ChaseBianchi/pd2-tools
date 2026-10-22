@@ -485,7 +485,7 @@ describe("Season 14 patch damage regressions", () => {
       "Poison Nova",
       ["Poison Dagger", "Desecrate"],
       "poison",
-      { min: 61, max: 110 },
+      { min: 60, max: 110 },
     ],
   ])(
     "uses hard-point synergies for %s",
@@ -992,12 +992,12 @@ function getExpectedVenomPoisonPayloadFromSkillsTxt(
   const synergyPercent =
     cobraStrikeBaseLevel * getGameFileNumber(skills, row, "Param8");
   const withSynergy = {
-    min: Math.floor(min * durationFrames * (1 + synergyPercent / 100)),
-    max: Math.floor(max * durationFrames * (1 + synergyPercent / 100)),
+    min: Math.floor(min * 256 * (100 + synergyPercent) / 100),
+    max: Math.floor(max * 256 * (100 + synergyPercent) / 100),
   };
   const damage = {
-    min: Math.floor(withSynergy.min * (1 + poisonSkillDamage / 100)),
-    max: Math.floor(withSynergy.max * (1 + poisonSkillDamage / 100)),
+    min: Math.floor(Math.floor(withSynergy.min * (100 + poisonSkillDamage) / 100) * durationFrames / 256),
+    max: Math.floor(Math.floor(withSynergy.max * (100 + poisonSkillDamage) / 100) * durationFrames / 256),
   };
 
   return {
@@ -1040,10 +1040,10 @@ function getExpectedHydraFirePayloadFromSkillsTxt(
 
   return {
     min: Math.floor(
-      Math.floor(min * (1 + synergyPercent / 100)) * (1 + masteryPercent / 100)
+      Math.floor(min * 256 * (100 + synergyPercent) / 100) * (100 + masteryPercent) / 25600
     ),
     max: Math.floor(
-      Math.floor(max * (1 + synergyPercent / 100)) * (1 + masteryPercent / 100)
+      Math.floor(max * 256 * (100 + synergyPercent) / 100) * (100 + masteryPercent) / 25600
     ),
   };
 }
@@ -1058,17 +1058,18 @@ function getExpectedSkeletalMagePayloadFromGameFiles(
   const mageRow = skills.rowsByKey.get("Raise Skeletal Mage")!;
   const masteryRow = skills.rowsByKey.get("Skeleton Mastery")!;
   const missileRow = missiles.rowsByKey.get(missileName)!;
+  const missileLevel = skeletonMasteryLevel + Math.max(0, Math.floor((mageLevel - 2) / 2));
   const min = getSourceLevelScaledValue(
     missiles,
     missileRow,
-    mageLevel,
+    Math.max(1, missileLevel),
     "EMin",
     ["MinELev1", "MinELev2", "MinELev3", "MinELev4", "MinELev5"]
   );
   const max = getSourceLevelScaledValue(
     missiles,
     missileRow,
-    mageLevel,
+    Math.max(1, missileLevel),
     "Emax",
     ["MaxELev1", "MaxELev2", "MaxELev3", "MaxELev4", "MaxELev5"]
   );
@@ -1313,7 +1314,7 @@ describeWithGameData("damage calculator component model", () => {
     const calculation = calculateDamage(createCharacter("Fire Claws", level));
     const profile = calculation.profiles.find((p) => p.skillId === "Fire Claws" && p.playerAuraId === "none");
     expect(profile.damageComponents.find((c) => c.source === "skill" && c.damageType === "fire")).toMatchObject({damage: hit, timing: "instant"});
-    expect(profile.damageComponents.find((c) => c.sourceRefs.some((r) => r.row === "clawfirestorm"))).toMatchObject({damage: ground, timing: "over_time"});
+    expect(profile.damageComponents.find((c) => c.sourceRefs.some((r) => r.row === "clawfirestorm"))).toMatchObject({damage: ground, timing: "over_time", includedInTotal: false});
   });
 
   it("uses beta temporary attack-speed stats for Split Throw and Double Swing", () => {
@@ -1662,12 +1663,12 @@ describeWithGameData("damage calculator component model", () => {
         profile.playerAuraCarrier === "self" &&
         profile.weaponId === calculation.weaponOptions[0].id
     );
-    expect(profiles).toHaveLength(7);
+    expect(profiles).toHaveLength(3);
     for (let level = 1; level <= 60; level++) {
       const bonus = command.selfLevelBonuses.find(
         (bonus) => bonus.level === level
       ).skillLevelBonus;
-      expect(bonus).toBe(1 + Math.floor(level / 10));
+      expect(bonus).toBe(1 + Math.floor(Math.min(level, 20) / 10));
       expect(
         profiles.some((profile) => profile.skillLevel === 20 + bonus)
       ).toBe(true);
@@ -2231,12 +2232,8 @@ describeWithGameData("damage calculator component model", () => {
       (["fire", "cold", "lightning"] as const).map((element) => [
         element,
         {
-          min: Math.floor(
-            vengeanceBaseByElement[element].min * (1 + percent / 100)
-          ),
-          max: Math.floor(
-            vengeanceBaseByElement[element].max * (1 + percent / 100)
-          ),
+          min: vengeanceBaseByElement[element].min * (1 + percent / 100),
+          max: vengeanceBaseByElement[element].max * (1 + percent / 100),
         },
       ])
     ) as Record<"fire" | "cold" | "lightning", DamageRange>;
@@ -2257,7 +2254,7 @@ describeWithGameData("damage calculator component model", () => {
           withVengeancePercent.cold.max * (1 + coldSkillDamage / 100)
         ),
       },
-      lightning: withVengeancePercent.lightning,
+      lightning: { min: Math.floor(withVengeancePercent.lightning.min), max: Math.floor(withVengeancePercent.lightning.max) },
     };
 
     expect(vengeanceOption).toMatchObject({ damageMode: "weapon" });
@@ -3435,7 +3432,7 @@ describeWithGameData("damage calculator component model", () => {
 
     expect(meteorProfile).toBeDefined();
     expect(meteorProfile!.damageScope.label).toBe(
-      "per impact plus ground fire"
+      "per impact"
     );
     expect(meteorProfile!.damageScope.note).toContain("meteorfire");
 
@@ -3449,20 +3446,20 @@ describeWithGameData("damage calculator component model", () => {
 
     expect(moltenBoulderProfile).toBeDefined();
     expect(moltenBoulderProfile!.damageScope.label).toBe(
-      "per impact plus fire path"
+      "per impact"
     );
     expect(moltenBoulderProfile!.damageScope.note).toContain(
       "moltenboulderfirepath"
     );
 
     for (const [skillName, expectedLabel, expectedNote] of [
-      ["Fire Arrow", "per impact plus fire wall", "firearrow firewall"],
+      ["Fire Arrow", "per impact", "firearrow firewall"],
       [
         "Immolation Arrow",
-        "per impact plus fire patches",
+        "per impact",
         "server-reachable fire patch",
       ],
-      ["Armageddon", "per impact plus ground fire", "armageddonfire"],
+      ["Armageddon", "per impact", "armageddonfire"],
       ["Thunder Storm", "per strike plus nova", "thunderstormnova"],
     ] as const) {
       const character = createCharacter(skillName, 20);
@@ -4431,7 +4428,7 @@ describeWithGameData("damage calculator component model", () => {
     ).toBe(false);
     expect(magicArrowProfile?.breakdown.flatPhysicalDamage).toEqual({
       min: 12,
-      max: 12,
+      max: 0,
     });
     expect(magicArrowProfile?.damageTotals.combinedDamage.max).toBeGreaterThan(
       0
@@ -4476,7 +4473,7 @@ describeWithGameData("damage calculator component model", () => {
       profiles.every(
         (profile) =>
           profile.damageScope.label ===
-          "per weapon hit plus ground DPS"
+          "per weapon hit"
       )
     ).toBe(true);
   });
@@ -4882,7 +4879,7 @@ describeWithMonStatsData("summon damage modeling", () => {
     const calculation = calculateDamage(character);
     const fireGolemProfile = calculation.profiles.find(
       (profile) =>
-        profile.skillId === "FireGolem" && profile.playerAuraId === "none"
+        profile.skillId === "FireGolem::normal" && profile.playerAuraId === "none"
     );
     const hydraProfile = calculation.profiles.find(
       (profile) =>
@@ -5104,7 +5101,7 @@ describeWithMonStatsData("summon damage modeling", () => {
     const calculation = calculateDamage(character);
     const clayProfile = calculation.profiles.find(
       (profile) =>
-        profile.skillId === "Clay Golem" && profile.playerAuraId === "none"
+        profile.skillId === "Clay Golem::normal" && profile.playerAuraId === "none"
     );
     const monsterComponent = clayProfile?.damageComponents.find(
       (component) => component.source === "monster"

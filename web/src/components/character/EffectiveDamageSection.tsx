@@ -5,6 +5,7 @@ import {
   Alert,
   Badge,
   Checkbox,
+  Button,
   Group,
   NumberInput,
   Paper,
@@ -49,6 +50,7 @@ const effectNames = [
   "Inner Sight",
   "Burst of Speed",
   "Poison Creeper",
+  "Static Field",
   "Arctic Blast",
   "Inferno",
 ];
@@ -66,8 +68,8 @@ export function EffectiveDamageSection({
   );
   const [detailId, setDetailId] = useState<string | null>(null);
   const catalog = useQuery({
-    queryKey: ["damage-targets", "season-14-v2"],
-    queryFn: () => apiClient.get<CombatCatalog>("/damage-targets"),
+    queryKey: ["damage-targets", "season-14-v3"],
+    queryFn: () => apiClient.get<CombatCatalog>("/characters/damage-targets"),
     enabled: mode !== "none",
     staleTime: Infinity,
   });
@@ -91,6 +93,13 @@ export function EffectiveDamageSection({
     [profile, calculation.combat, catalog.data, mode, settings]
   );
   const selected = results.find((r) => r.monster.id === detailId) || results[0];
+  const averageLanded = results.length ? {
+    min: results.reduce((sum, result) => sum + result.landed.min, 0) / results.length,
+    max: results.reduce((sum, result) => sum + result.landed.max, 0) / results.length,
+  } : null;
+  const averageDps = results.length && results.every((result) => result.dps !== null)
+    ? results.reduce((sum, result) => sum + result.dps!, 0) / results.length : null;
+  const selectedStats = selected?.monster.target?.difficulties[["normal", "nightmare", "hell"][settings.difficulty] as "hell"];
   const numeric = (
     key:
       | "attackSlow"
@@ -129,7 +138,7 @@ export function EffectiveDamageSection({
             const next = value || "none";
             setMode(next);
             setDetailId(null);
-            if (next !== "map") update("areaId", null);
+            setSettings((old) => ({ ...old, areaId: next !== "map" ? null : old.areaId, protected: false, immunityAura: false }));
           }}
           data={[
             { value: "none", label: "No target — raw damage" },
@@ -180,7 +189,7 @@ export function EffectiveDamageSection({
                   searchable
                   value={settings.monsterId}
                   allowDeselect={false}
-                  onChange={(value) => update("monsterId", value || "diablo")}
+                  onChange={(value) => setSettings((old) => ({ ...old, monsterId: value || "diablo", protected: false, immunityAura: false }))}
                   data={catalog.data.monsters.map((m) => ({
                     value: m.id,
                     label: `${m.name} (${m.id})`,
@@ -242,6 +251,14 @@ export function EffectiveDamageSection({
                         />
                       ))}
                     </SimpleGrid>
+                    {mode === "monster" && <>
+                      <Checkbox label="Target is in a protected / invulnerable phase" checked={Boolean(settings.protected)}
+                        onChange={(event) => update("protected", event.currentTarget.checked)} />
+                      {selected?.monster.target?.difficulties[["normal", "nightmare", "hell"][settings.difficulty] as "hell"].receivesImmunityAura &&
+                        <Checkbox label="Nearby immunity aura is active (+200% all resistances)" checked={Boolean(settings.immunityAura)}
+                          onChange={(event) => update("immunityAura", event.currentTarget.checked)} />}
+                    </>}
+                    <Button variant="default" size="xs" onClick={() => setSettings((old) => ({ ...defaultCombatSettings(), monsterId: old.monsterId, areaId: old.areaId, difficulty: old.difficulty }))}>Reset target conditions</Button>
                     <Checkbox
                       label="Use special map-boss Crushing Blow rules"
                       checked={settings.mapBoss}
@@ -358,6 +375,9 @@ export function EffectiveDamageSection({
             ) : null}
             {results.length ? (
               <>
+                {mode === "map" && averageLanded && <Text data-testid="effective-map-average">
+                  Average per monster type: {range(averageLanded)} · Effective DPS: {format(averageDps)}
+                </Text>}
                 <Table.ScrollContainer minWidth={720}>
                   <Table striped withTableBorder>
                     <Table.Thead>
@@ -430,6 +450,9 @@ export function EffectiveDamageSection({
                         </Badge>
                       ))}
                     </Group>
+                    {selectedStats && <Text size="xs" c="dimmed">
+                      Flat physical reduction: {selectedStats.flatPhysicalReduction} · Flat magic reduction: {selectedStats.flatMagicReduction} · Poison length reduction: {selectedStats.poisonLengthReduction}% · Curse duration reduction: {selectedStats.curseResistance}% · Curse effect reduction: {selectedStats.curseEffectReduction}% · Block: {selectedStats.block}%
+                    </Text>}
                     <SimpleGrid cols={{ base: 2, sm: 4 }}>
                       <Text>Instant DPS: {format(selected.instantDps)}</Text>
                       <Text>DoT DPS: {format(selected.dotDps)}</Text>

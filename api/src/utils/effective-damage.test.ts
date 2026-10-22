@@ -173,7 +173,7 @@ describe("effective damage: independent arithmetic and boundaries", () => {
     [120, [40], 0, 100],
     [120, [42], 0, 99],
     [0, [21], 0, -10],
-    [-40, [], 20, -30],
+    [-40, [], 20, -50],
     [0, [500], 500, -100],
   ])(
     "resistance %s breakers %s pierce %s => %s",
@@ -535,5 +535,102 @@ describe("effective damage: independent arithmetic and boundaries", () => {
           previous = r;
         }
       }
+  });
+});
+
+
+describe("merged target defenses and sustained damage", () => {
+  it("keeps map and dungeon pools in Hell without inventing Normal or Nightmare spawns", () => {
+    for (const area of getCombatCatalog().areas.filter((area) => area.map)) {
+      expect(area.monsters[0]).toEqual([]);
+      expect(area.monsters[1]).toEqual([]);
+      expect(area.monsters[2].length).toBeGreaterThan(0);
+    }
+  });
+  function defended(mode: "weapon" | "spell" | "summon" = "spell") {
+    const data = setup(mode);
+    const target = data.catalog.monsters[0];
+    const stats = { resistances: emptyCombatResistances(), poisonLengthReduction: 0,
+      curseResistance: 0, curseEffectReduction: 0, receivesImmunityAura: false,
+      flatPhysicalReduction: 0, flatMagicReduction: 0, absorbPercent: {}, absorbFlat: {}, block: 0, notes: [] };
+    target.target = { id: target.id, monsterId: target.id, name: target.name,
+      kind: "monster", creatureType: "other", difficulties: { normal: stats, nightmare: stats, hell: stats },
+      fixedModifiers: [], areas: [], notes: [] };
+    return { ...data, stats };
+  }
+  it("applies flat absorption per stream event in the full DPS path", () => {
+    const { profile, stats, run } = defended();
+    profile.damageComponents = [{ ...profile.damageComponents[0], damageType: "fire", damage: range(2500), timing: "over_time", damageEventsPerUnit: 25 }];
+    stats.absorbFlat = { fire: 8 };
+    const result = run();
+    expect(result.landed).toEqual(range(2300));
+    expect(result.dotDps).toBe(2300);
+    expect(result.absorptionHealing).toEqual(range(200));
+  });
+  it("applies reduction to each critical outcome before averaging and attack cadence", () => {
+    const { profile, stats, run } = defended("weapon");
+    profile.damageComponents[0].damage = range(10);
+    stats.flatPhysicalReduction = 15;
+    profile.strikeBreakdowns = [{ id: "strike", physicalComponentIds: ["physical"], criticalChance: 50,
+      effectiveDeadlyStrikeChance: 0, criticalMultiplier: 2, deadlyStrikeMultiplier: 1.5 }] as DamageProfile["strikeBreakdowns"];
+    expect(run().landed).toEqual(range(2.5));
+    expect(run().instantDps).toBe(5);
+  });
+  it("uses reduced poison duration for coverage without multiplying total poison by rate", () => {
+    const { profile, stats, run } = defended();
+    profile.damageComponents = [{ ...profile.damageComponents[0], damageType: "poison", timing: "over_time", damage: range(200), poisonDamage: { total: 200, durationSeconds: 2 } }];
+    stats.poisonLengthReduction = 50;
+    const result = run({ rateOverride: 0.5 });
+    expect(result.landed).toEqual(range(100));
+    expect(result.dotDps).toBe(50); // 100 DPS, one-second duration, 50% coverage.
+  });
+  it("keeps separate ground DPS when the raw profile contains only impact totals", () => {
+    const { profile, run } = defended();
+    profile.damageComponents.push({ ...profile.damageComponents[0], id: "ground", damageType: "fire", damage: range(250),
+      timing: "over_time", includedInTotal: false, damageEventsPerUnit: 25 });
+    const result = run();
+    expect(result.raw).toEqual(range(100));
+    expect(result.landed).toEqual(range(100));
+    expect(result.instantDps).toBe(200);
+    expect(result.dotDps).toBe(250);
+    expect(result.dps).toBe(450);
+  });
+  it("blocks curses on curse-immune targets without blocking Battle Cry", () => {
+    const { stats, combat, run } = defended();
+    stats.resistances.physical = 50;
+    stats.curseResistance = 100;
+    for (const name of ["Amplify Damage", "Battle Cry"]) combat.effects[name] = Array.from({ length: 81 }, () => ({
+      attackSpeed: 0, attackRatingPercent: 0, defensePercent: 0, defenseFlat: 0,
+      reductions: { ...emptyCombatResistances(), physical: 40 },
+    }));
+    expect(run({ debuffs: [{ name: "Amplify Damage", level: 20 }] }).resistances.physical).toBe(50);
+    expect(run({ debuffs: [{ name: "Battle Cry", level: 20 }] }).resistances.physical).toBe(10);
+  });
+  it("does not let target protection or immunity aura leak into map comparisons", () => {
+    const { stats, catalog, run } = defended();
+    stats.receivesImmunityAura = true;
+    expect(run({ protected: true }).dps).toBe(0);
+    expect(run({ immunityAura: true }).resistances.physical).toBe(200);
+    catalog.areas = [{ id: "map", name: "Map", map: true, levels: [90,90,90], monsters: [["target"],["target"],["target"]] }];
+    expect(run({ areaId: "map", protected: true, immunityAura: true }).dps).toBe(200);
+  });
+  it("uses the source-backed pet pierce instead of inheriting all caster pierce", () => {
+    const { profile, stats, run } = defended("summon");
+    profile.damageComponents[0].damageType = "fire";
+    profile.targetModifiers = { resistancePierce: { fire: 5 }, convictionLevel: 0 };
+    stats.resistances.fire = 50;
+    expect(run().landed).toEqual(range(55));
+  });
+  it("uses the owned hard-point Battle Command curve for passive combat bonuses", () => {
+    const { profile, combat, run } = defended("weapon");
+    profile.activeAuras = [{ name: "Battle Command", level: 60, carrier: "self", source: "player_skill" }];
+    combat.commandSelfBonuses = Array(81).fill(1); // CTA with zero hard points.
+    combat.weapons.weapon.skillBonuses = Array.from({ length: 8 }, (_, i) => ({ baseAttackRating: i * 10,
+      pierce: emptyCombatResistances(), gearIAS: 0, crushingBlow: 0, crushingEfficiency: 0, openWounds: 0, openWoundsDps: 0 }));
+    expect(run().attackRating).toBe(1010);
+  });
+  it("shares the exact mitigation implementation between API and browser builds", () => {
+    expect(fs.readFileSync(path.join(__dirname, "target-damage.ts"), "utf8"))
+      .toBe(fs.readFileSync(path.resolve("../web/src/utils/target-damage.ts"), "utf8"));
   });
 });

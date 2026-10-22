@@ -1,6 +1,6 @@
 # Season 14 beta game data
 
-The calculator uses the **installed beta extracted on October 21, 2026**, replacing the manually mapped tentative patch. The 11 committed text tables are unchanged extracts from `ProjectD2/pd2data.mpq`; no patch-note values are layered on top. `Armor.txt`, `Weapons.txt`, and `MonLvl.txt` already matched the downloaded data. The original Season 13 directory remains intact.
+The calculator uses the **installed beta extracted on October 21, 2026**, replacing the manually mapped tentative patch. The 15 committed text tables are unchanged extracts from `ProjectD2/pd2data.mpq`; no patch-note values are layered on top. `Armor.txt`, `Weapons.txt`, and `MonLvl.txt` already matched the downloaded data. The original Season 13 directory remains intact.
 
 The active installation and `ProjectD2/Live/pd2data.mpq` had the same SHA-256. The directory named `Beta` still contained November 2025 files and was deliberately excluded. [`SOURCE_MANIFEST.json`](SOURCE_MANIFEST.json) records archive/DLL hashes, normalized text hashes, row counts, schemas, and generated-file provenance. The beta is a dated snapshot, not a promise that subsequent beta or release builds are identical.
 
@@ -12,12 +12,13 @@ The active installation and `ProjectD2/Live/pd2data.mpq` had the same SHA-256. T
 | `Missiles.txt` | Server-reachable damage payloads, damage units, child missiles and ground effects |
 | `SkillDesc.txt` | Payload/display bindings and tooltip formulas |
 | `MonStats.txt`, `MonLvl.txt` | Monster targets, summon bases and difficulty scaling |
+| `MonStats2.txt`, `MonProp.txt`, `SuperUniques.txt`, `MonPreset.txt` | Target eligibility, innate defenses and auras, fixed named-monster modifiers, and direct encounter placements |
 | `Levels.txt` | Area levels and monster populations, including the four new populated map/event records |
 | `Properties.txt`, `ItemStatCost.txt` | Armory modifier expansion, stat names and local/global stat behavior |
 | `Armor.txt`, `Weapons.txt` | Base combat data, weapon speeds and socket limits |
 | `CharStats.txt` | Class attack-rating constants and source growth values; armory life/mana are not rewritten |
 | `CombatAnimations.json` | Player/form animation data from `pd2assets.mpq` and sequences from `D2Common.dll` |
-| `TargetNames.json` | English names from the base, expansion and PD2 string tables |
+| `TargetNames.json` | English names from the base, expansion and PD2 string tables, including named-monster keys |
 
 Calculations still use one global mechanics snapshot. Selecting a historical character season does not select historical mechanics. Database season settings, ingestion schedules and UI season defaults are unchanged.
 
@@ -29,7 +30,7 @@ Calculations still use one global mechanics snapshot. Selecting a historical cha
 - Fire Arrow, Phoenix Strike, Meteor ground fire, Poison Creeper, skeleton archers, wolves, Grizzly, Heart of Wolverine and curse procs use their extracted revised formulas.
 - Poison Strike's conditional pierce is read from its temporary aura stat. Warmth's flat AR and Battle Command increments are applied before percentage AR. Temporary attack-speed buffs include Split Throw.
 - Spirit of Barbs' additional Deadly Strike cap uses the owner's **hard points**, including owned-aura precomputed values. Unknown party hard points are not inferred from soft aura level; the UI explains the omitted extra cap.
-- Quoted expressions inside formulas are handled without changing the extracted cells. The original expression allow-list remains in force.
+- Quoted expressions inside formulas are handled without changing the extracted cells. A restricted integer arithmetic parser evaluates each operation without executing source formulas as JavaScript.
 - New populated area IDs **207–210** are available as map comparisons; empty guild halls are excluded. Library's Hell area level is **87**.
 
 ## Reproduction and verification
@@ -43,6 +44,8 @@ python api/tools/generate-combat-data.py --extract <scratch-extract> --d2common 
 ```
 
 Reconcile a new extraction deliberately; do not reuse the old manually edited tentative values. `season-14.test.ts` verifies the committed files against the source manifest and independently transcribed beta cells. Calculator tests exercise numeric tier boundaries, hard/soft-point distinctions and changed runtime metadata.
+
+Verify fresh monster text against the shipped binary with `python api/tools/validate-monster-data.py <scratch-extract>`. The merged snapshot matched all 57,735 compared values across 1,283 compiled records.
 
 See [BETA_VALIDATION.md](BETA_VALIDATION.md) for current verification and [EFFECTIVE_DAMAGE.md](EFFECTIVE_DAMAGE.md) for model rules and limitations. The October 16 validation reports and CSVs describe the earlier provisional implementation and remain historical evidence.
 

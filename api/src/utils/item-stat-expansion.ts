@@ -227,13 +227,6 @@ function expandDirectStatModifier(
   }
 }
 
-function normalizeDamageRange(range: DamageRange): DamageRange {
-  return {
-    min: Math.max(0, range.min),
-    max: Math.max(Math.max(0, range.min), range.max),
-  };
-}
-
 export function expandItemStats(item: Pick<IItem, "modifiers">) {
   const ledger: ExpandedItemStatLedger = {};
   const propertyExpansions = getPropertyExpansions();
@@ -269,7 +262,9 @@ export function getExpandedItemElementalDamageRanges(
       return;
     }
 
-    ranges[element] = normalizeDamageRange({ min, max });
+    // These are stat additions, not complete attack ranges. A minimum-only
+    // bonus must not manufacture a maximum bonus before items are combined.
+    ranges[element] = { min, max };
   });
 
   return ranges;

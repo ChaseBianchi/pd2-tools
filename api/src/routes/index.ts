@@ -6,7 +6,6 @@ import statisticsRoutes from "./statistics";
 import accountsRoutes from "./accounts";
 import leaderboardRoutes from "./leaderboard";
 import homeRoutes from "./home";
-import damageTargetsRoutes from "./damage-targets";
 
 const router = Router();
 
@@ -17,6 +16,5 @@ router.use("/statistics", statisticsRoutes);
 router.use("/accounts", accountsRoutes);
 router.use("/leaderboard", leaderboardRoutes);
 router.use("/home", homeRoutes);
-router.use("/damage-targets", damageTargetsRoutes);
 
 export default router;
