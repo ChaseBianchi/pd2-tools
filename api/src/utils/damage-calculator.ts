@@ -7465,6 +7465,7 @@ function buildSummonProfile(
 }
 
 function buildSpellProfile(
+  characterData: CharacterData,
   context: WeaponSetContext,
   weaponSelection: WeaponSelection,
   skillOption: DamageSkillOption,
@@ -7472,7 +7473,7 @@ function buildSpellProfile(
 ): DamageProfile {
   const { option: playerAuraOption, carrier: playerAuraCarrier } =
     playerAuraSelection;
-  const { realStats, skillMap } = context;
+  const { realStats, skillMap, playerItems } = context;
   const selectedPlayerAura =
     playerAuraOption.id === "none"
       ? undefined
@@ -7506,6 +7507,26 @@ function buildSpellProfile(
     skillOption.name,
     directDamage
   );
+  const strikeBreakdowns: DamageStrikeBreakdown[] = [];
+  // ProjectDiablo.dll's strike hooks explicitly allow skill IDs 240/243/245
+  // despite their zero SrcDam. Other physical spells retain their normal rules.
+  if (["Twister", "Shock Wave", "Tornado"].includes(skillOption.name)) {
+    let modifiers = addStrikeModifiers(
+      getItemStrikeModifiers(playerItems, weaponSelection, characterData.character.level),
+      getPassiveStrikeModifiers(weaponSelection, effectiveSkillMap)
+    );
+    activeAuras.forEach((aura) => {
+      modifiers = addStrikeModifiers(modifiers, getAuraStrikeModifiers(
+        aura, aura.carrier === "self" ? effectiveSkillMap : EMPTY_SKILL_MAP
+      ));
+    });
+    strikeBreakdowns.push(buildStrikeBreakdown(
+      `spell:${weaponSelection.option.id}:${skillOption.name}`, skillOption.name,
+      damageComponents.filter((component) => component.damageType === "physical" && component.timing === "instant").map((component) => component.id),
+      modifiers
+    ));
+    damageComponents.push(...createStrikeDamageComponents(damageComponents, strikeBreakdowns));
+  }
   const directPhysicalSynergyPercent = getDirectPhysicalSkillSynergyPercent(
     skillOption.name,
     effectiveSkillMap
@@ -7563,7 +7584,7 @@ function buildSpellProfile(
     activeAuras: activeAuras.map(summarizeAuraSource),
     damageScope,
     damageComponents,
-    strikeBreakdowns: [],
+    strikeBreakdowns,
     damageTotals,
     ...getAuraPulseProfileFields(auraPulseDamageComponents),
     totalPhysicalDamage,
@@ -7741,6 +7762,7 @@ function buildProfile(
 
   if (skillOption.damageMode === "spell") {
     return buildSpellProfile(
+      characterData,
       context,
       weaponSelection,
       skillOption,
@@ -9085,7 +9107,7 @@ export function calculateDamage(
 
   const notes = [
     "Damage is an estimate built from PD2 game files. Totals combine immediate hit damage, expected Critical/Deadly Strike bonus damage, and modeled damage-over-time totals, but they do not include attack speed, cast speed, hit chance, target resistances, crushing blow, repeated summon attacks, or conditional buffs.",
-    "Critical Strike is capped at 75% and checked before Deadly Strike; Deadly Strike is capped at 75% plus Maximum Deadly Strike, up to 100%. Expected strike bonuses apply only to instant physical attack damage, and weapon strike stats apply only to hits with that weapon.",
+    "Critical Strike is capped at 75% and checked before Deadly Strike; Deadly Strike is capped at 75% plus Maximum Deadly Strike, up to 100%. Expected strike bonuses apply to instant physical weapon hits and Twister, Tornado, and Shock Wave. Weapon strike stats use the selected weapon.",
     "External aura entries assume up to 20 invested skill points. Battle Command can give a different all-skills bonus if its caster has fewer invested points; owned Battle Command uses the character's actual invested points.",
   ];
 

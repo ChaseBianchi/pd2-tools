@@ -1,15 +1,14 @@
 {
-  "snapshot": "Season 14 installed beta",
-  "extractedOn": "2026-10-21",
-  "reverifiedOn": "2026-10-22",
-  "reverification": "Fresh extraction after the reported patch update: all 15 committed text tables are byte-identical; generated names/animations are content-identical; active and Live archives/DLLs match the launcher's current local checksums; all 57735 compiled monster comparisons pass again.",
+  "snapshot": "Season 14 installed patch",
+  "extractedOn": "2026-10-23",
+  "reverifiedOn": "2026-10-23",
   "sourceDirectory": "ProjectD2 (active installation; same pd2data.mpq as Live)",
   "normalization": "SHA-256 of UTF-8 text after CRLF to LF conversion; no cell edits",
   "archives": {
-    "pd2data.mpq": "666c4e90930b7f234777c69a2daa1294f7646b98a530327ccf58a3a9019ec39e",
-    "pd2assets.mpq": "2ceb83ca8e9f482fa46a94cda95d2ab80f8415a0d2c1047a44f64d4a95cf56af",
+    "pd2data.mpq": "61ad0e8e0a9ecde59191b214bb8bee871185d771055d800094b8d79c10ac5551",
+    "pd2assets.mpq": "6945dc862f2360df61ce9d21652a5587b4637b1251ae51d0d1e2ce1713588cd9",
     "D2Common.dll": "59fa5928522f566f2bf99675571206ad70df889c89d3d07fa87edf5083e06e10",
-    "ProjectDiablo.dll": "17d5fb1b049d8076226d27295487b49c8b5f2629553c193a01aa1e3d8afaba57"
+    "ProjectDiablo.dll": "41d49d63d531050bb0c89db9efd191fefd322378683159be5dc059498ae1e424"
   },
   "files": {
     "Armor.txt": {
@@ -38,18 +37,18 @@
       "extractedSha256": "d6230a83a38d9f24fa9e7803d0f0695a9b298689cf418db3cabb3e168055063f"
     },
     "Levels.txt": {
-      "sha256": "c476673b141280b815ddadba695da5b16b989d04033f1ac0eabbe5a7abffb63c",
+      "sha256": "4e022f1dac3ac1fd9d5b1dd4be702d278a20e48f544b307e5fb47b9b640f4067",
       "source": "pd2data.mpq",
       "rows": 212,
       "columns": 185,
-      "extractedSha256": "39e53a003b5c6578247db0ce4aa03fa30dd5a6fe880c20c50525596fd40bb26c"
+      "extractedSha256": "c4f85c9e63a9187b93a37a0e387a7a18db2b815f79a15fc38274da94eec06399"
     },
     "Missiles.txt": {
-      "sha256": "4b1d66c2714bd3b5b850edebd24da9687c1bfec4717e11473508af4d46ce45fd",
+      "sha256": "8a67e047266db4eb9434661fa55ab57602c355099113c943593c136835e5634f",
       "source": "pd2data.mpq",
-      "rows": 1063,
+      "rows": 1066,
       "columns": 171,
-      "extractedSha256": "81a7b2b01dcada71dba61ed91d393015f2b6a855e3a295c1170da43866d0f880"
+      "extractedSha256": "78e3b80b4cade09e1e4a0c9e9fd0eb9f7d7193ea6a914faa2a7ac5902c3780d7"
     },
     "MonLvl.txt": {
       "sha256": "7624abe33673f8bf4f243de141fb387a1d78f1192466ace49ac8b3c175fa4df8",
@@ -59,11 +58,11 @@
       "extractedSha256": "bda243efe1d1e9591f75b8cf97ac73f78ff691362381f35cc000233eb46c092a"
     },
     "MonStats.txt": {
-      "sha256": "cb84eec69496ad619ea7dbced9d7df39cb10e39377cc12da7955e8f169380730",
+      "sha256": "8fed21e51b2003a5f723f4953d6bb2d1b8b2f0080b5a7066a9f026dba4e940f4",
       "source": "pd2data.mpq",
       "rows": 1284,
       "columns": 255,
-      "extractedSha256": "b743cc0040ee1646c05ee9e7c83be647f29e2e4c0a6ad43c465e36e6f4bdb8e4"
+      "extractedSha256": "47678d8e14a4a7ceeaad6f9320dde9e23fc7b7c800a119633f2971db0255c9b9"
     },
     "Properties.txt": {
       "sha256": "ad74c5439f6dd1c50fab99cbf9a9f804db405b40aab71c2fc94894e259cb0cb7",
@@ -80,14 +79,14 @@
       "extractedSha256": "f11f70872d61936090e77c33382ed0c2cb1f984d9e6509bce081fe2a9f4178a3"
     },
     "Skills.txt": {
-      "sha256": "61101c481003ee73c3bc9683f78ffcb97aa65a4cb5e48e89091d185110ad0b51",
+      "sha256": "51cd1bd5251a2a822c4ee4b41b1ba6f6552c369d1826e97a7a2c19bbc8a1bb12",
       "source": "pd2data.mpq",
-      "rows": 610,
+      "rows": 614,
       "columns": 256,
-      "extractedSha256": "0bf4da2418f1c5df5acf47e410f927bc1a036f69e0edbbf1ea4c74d4b21b0f8b"
+      "extractedSha256": "ae56cbdcfdd0e98633467eb30ca46020c6c118b737bbbe6ef570e2e1e888d96c"
     },
     "TargetNames.json": {
-      "sha256": "65c13f6a990b7d13a9c5e824c5f909d2369620df5dd909a20664dfa2bcc6599f",
+      "sha256": "52b793206ad0ccdc9986878755c598e36e7fc55c35ae6ff6109dc1db6fe11ae5",
       "source": "generated from base, expansion and pd2data.mpq English string tables"
     },
     "Weapons.txt": {
@@ -98,18 +97,18 @@
       "extractedSha256": "a62716b22aae91f86a79f60955a08705288df521cb17b00d622f05961446e9ae"
     },
     "MonStats2.txt": {
-      "sha256": "f5182ae1f455006bf4fa90eeb00de7df73833bfcf6669b93c76e340020668abb",
+      "sha256": "ec818937f541c0340eac2bb9dbba2671336bb20ddf4ddfe9b1ad650b7441d381",
       "source": "pd2data.mpq",
-      "rows": 741,
+      "rows": 744,
       "columns": 126,
-      "extractedSha256": "029650b77a73073b3f1d66a9a90c78da1c4822d196bdd93b6fd73d5f28f94d3b"
+      "extractedSha256": "7c8b0d288c9880a2b33c15664e8864f969b09143838b0877eae321b5f128f6a2"
     },
     "MonProp.txt": {
-      "sha256": "e7f8e3574faf7bddf99885945b2c96cfbb9d7a2be7c67de8b85920e91c3e543a",
+      "sha256": "4b12067264c23cca8c9dfb08b2fe1f33fc9cd98379a6e63ac386f389545bf86b",
       "source": "pd2data.mpq",
-      "rows": 67,
+      "rows": 66,
       "columns": 92,
-      "extractedSha256": "907a74dbafa2140bbde48c1fdefee6a30befc46e2bfe1db6e383b54ef573727e"
+      "extractedSha256": "b0979ae1bb06d90a8b886a341ca9d0aee9d7f79335d1cbe99b43e2508174c8e8"
     },
     "MonPreset.txt": {
       "sha256": "4d2c2bcb984f1041abbd56054b2e6a954f91e74abc21308d46eb9da19219f5f6",
@@ -119,17 +118,17 @@
       "extractedSha256": "a99ed04f9268144f184e19d58394f745a348ac0e1287b79927bc5e5a3097fee8"
     },
     "SuperUniques.txt": {
-      "sha256": "fedaa063116a0bb9d14e9d8c39106bb21178f7ed68ad204495ed35063c3964d6",
+      "sha256": "57c51fd511d285a2352de2dd63494c5497a455946ed730679c4c90596e8cbe70",
       "source": "pd2data.mpq",
       "rows": 68,
       "columns": 21,
-      "extractedSha256": "1b9b8a3b949f03d2d08b94f46dc7fed5a00b27fee90fe89b9ecf428ee80ada48"
+      "extractedSha256": "371c19892dc026aff5ae4535237d26d60b55f113f81fd9c067ad174683209ba2"
     }
   },
   "compiledValidation": {
     "file": "data/global/excel/MonStats.bin",
     "source": "pd2data.mpq",
-    "sha256": "973235e1e8103a16f43b755a09b43d217a110bf4700f990bae664bd61b7c4a44",
+    "sha256": "842e128b6151dda9b19c824b8a12265dc71203bb7e6ff3d56c64b30479e143bd",
     "records": 1283,
     "recordBytes": 424,
     "comparedValues": 57735,

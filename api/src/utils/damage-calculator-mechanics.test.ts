@@ -44,6 +44,54 @@ function baseProfile(data: CharacterData, skill = "Basic Attack"): DamageProfile
 }
 
 describe("independent damage mechanics", () => {
+  it.each([
+    { skill: "Twister", physical: { min: 94, max: 119 } },
+    { skill: "Tornado", physical: { min: 277, max: 319 } },
+    { skill: "Shock Wave", physical: { min: 151, max: 231 } },
+  ])("applies S14 Critical/Deadly Strike only to $skill's physical spell payload", ({ skill, physical }) => {
+    const data = character(skill, 20);
+    data.character.class = { id: 5, name: "Druid" };
+    data.items[0].modifiers = [
+      { name: "item_crit_chance", values: [50] },
+      { name: "item_deadlystrike", values: [50] },
+    ] as IItem["modifiers"];
+    const p = baseProfile(data, skill);
+    expect(p.totalPhysicalDamage).toEqual(physical);
+    expect(p.strikeBreakdowns).toHaveLength(1);
+    expect(p.strikeBreakdowns[0].criticalChance).toBe(50);
+    expect(p.strikeBreakdowns[0].effectiveDeadlyStrikeChance).toBe(25);
+    expect(p.damageTotals.byElement.critical).toEqual({ min: physical.min * .5, max: physical.max * .5 });
+    expect(p.damageTotals.byElement.deadly).toEqual({ min: physical.min * .125, max: physical.max * .125 });
+  });
+  it.each(["War Cry", "Fire Ball"])("keeps strike modifiers out of %s", (skill) => {
+    const control = baseProfile(character(skill, 20), skill);
+    const data = character(skill, 20);
+    data.items[0].modifiers = [
+      { name: "item_crit_chance", values: [100] },
+      { name: "item_deadlystrike", values: [100] },
+    ] as IItem["modifiers"];
+    const p = baseProfile(data, skill);
+    expect(p.strikeBreakdowns).toEqual([]);
+    expect(p.totalDamage).toEqual(control.totalDamage);
+  });
+  it("uses only active weapon-set strike stats for physical spells without adding weapon damage", () => {
+    const data = character("Tornado", 1);
+    data.items[0].modifiers = [{ name: "item_deadlystrike", values: [20] }] as IItem["modifiers"];
+    const swap = weapon("swap", "Right Hand Switch");
+    swap.modifiers = [{ name: "item_deadlystrike", values: [60] }] as IItem["modifiers"];
+    data.items.push(swap);
+    const profiles = calculateDamage(data).profiles.filter((p) => p.skillId === "Tornado" && p.playerAuraId === "none");
+    const right = profiles.find((p) => p.weaponId.startsWith("primary:right:"))!;
+    const switched = profiles.find((p) => p.weaponId.startsWith("secondary:right:"))!;
+    expect(right.totalPhysicalDamage).toEqual({ min: 35, max: 39 });
+    expect(switched.totalPhysicalDamage).toEqual(right.totalPhysicalDamage);
+    expect(right.strikeBreakdowns[0].deadlyStrikeChance).toBe(20);
+    expect(switched.strikeBreakdowns[0].deadlyStrikeChance).toBe(60);
+    expect(right.damageTotals.byElement.deadly?.min).toBeCloseTo(3.5);
+    expect(right.damageTotals.byElement.deadly?.max).toBeCloseTo(3.9);
+    expect(switched.damageTotals.byElement.deadly?.min).toBeCloseTo(10.5);
+    expect(switched.damageTotals.byElement.deadly?.max).toBeCloseTo(11.7);
+  });
   it("carries stream event rates into target mitigation", () => {
     const inferno = baseProfile(character("Inferno", 20), "Inferno");
     expect(inferno.damageComponents.find((c) => c.damageType === "fire")?.damageEventsPerUnit).toBe(25);

@@ -1258,6 +1258,7 @@ export function applyAuraToProfile(
   );
 
   if (profile.skillDamageMode === "spell") {
+    const damageComponents = rebuildStrikeDamageComponents(profile.damageComponents, strikeBreakdowns);
     return {
       ...profile,
       key: `${profile.key}::aura:${auraOption.id}:${numericLevel}:${selectedAura.carrier}`,
@@ -1270,6 +1271,9 @@ export function applyAuraToProfile(
         carrier: selectedAura.carrier,
       },
       activeAuras: replaceAuraSummary(profile.activeAuras, effectiveAura),
+      damageComponents,
+      strikeBreakdowns,
+      ...summaryFieldsFromComponents(damageComponents),
       notes,
     };
   }

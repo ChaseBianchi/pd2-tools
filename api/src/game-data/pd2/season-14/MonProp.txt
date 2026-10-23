@@ -65,4 +65,3 @@ KyovoshadBoss	aura	100	108	10	10																										aura	100	108	10	10				
 Nakrul	swing2			100	100	aura	100	122	1	1																					swing2			100	100	aura	100	122	1	1																					swing2			100	100	aura	100	122	1	1																					
 InvaderAttackspeed	swing2			100	100																										swing2			100	100																										swing2			100	100																										
 InvaderAmazon	swing2			100	100	pierce	100		100	100																					swing2			100	100	pierce	100		100	100																					swing2			100	100	pierce	100		100	100																					
-DarkTempleBoss	aura	100	119	15	15																										aura	100	119	15	15																										aura	100	119	15	15																										0

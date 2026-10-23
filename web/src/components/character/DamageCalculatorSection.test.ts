@@ -99,6 +99,34 @@ function aura(id: string): DamageAuraOption {
 }
 
 describe("damage calculator aura interactions", () => {
+  it.each([false, true])("applies a spirit's strike bonus to an eligible spell (party=%s) without attack aura damage", (party) => {
+    const p = profile();
+    p.skillDamageMode = "spell";
+    p.skillName = p.skillId = "Tornado";
+    p.strikeBreakdowns = [{
+      id: "spell", label: "Tornado", physicalComponentIds: ["physical"],
+      rawCriticalChance: 0, criticalChance: 0, criticalMultiplier: 2,
+      rawDeadlyStrikeChance: 0, rawMaxDeadlyStrikeChance: 75,
+      deadlyStrikeChance: 0, maxDeadlyStrikeChance: 75,
+      effectiveDeadlyStrikeChance: 0, deadlyStrikeMultiplier: 1.5,
+    }];
+    const spirit = aura("Spirit of Barbs");
+    for (const row of [...spirit.selfLevelBonuses, ...spirit.partyLevelBonuses]) {
+      row.physicalBonusPercent = 100;
+      row.elementalDamage = { fire: { min: 500, max: 1000 } };
+      row.strikeModifiers!.deadlyStrikeChance = 40;
+    }
+    const buffed = applyAuraToProfile(p, spirit, party, "20", "manual");
+    expect(buffed.totalPhysicalDamage).toEqual({ min: 100, max: 200 });
+    expect(buffed.damageTotals.byElement.deadly).toEqual({ min: 20, max: 40 });
+    expect(buffed.totalDamage).toEqual({ min: 120, max: 240 });
+    expect(buffed.totalElementalDamage.fire).toBeUndefined();
+    expect(applyAuraToProfile(buffed, spirit, party, "20", "manual").totalDamage).toEqual(buffed.totalDamage);
+    expect(p.totalDamage).toEqual({ min: 100, max: 200 });
+    p.skillName = p.skillId = "War Cry";
+    p.strikeBreakdowns = [];
+    expect(applyAuraToProfile(p, spirit, party, "20", "manual").totalDamage).toEqual(p.totalDamage);
+  });
   it("keeps an owned Enchant payload when another physical aura is added", () => {
     const enchant = aura("Enchant");
     enchant.selfLevelBonuses[0].elementalDamage = {
