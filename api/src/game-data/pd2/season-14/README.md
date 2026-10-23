@@ -1,8 +1,18 @@
-# Season 14 beta game data
+# Season 14 game data
 
-The calculator uses the **installed beta extracted on October 21, 2026**, replacing the manually mapped tentative patch. The 15 committed text tables are unchanged extracts from `ProjectD2/pd2data.mpq`; no patch-note values are layered on top. `Armor.txt`, `Weapons.txt`, and `MonLvl.txt` already matched the downloaded data. The original Season 13 directory remains intact.
+The calculator uses the **installed patch extracted on October 23, 2026**. The 15 committed text tables are unmodified extracts from `ProjectD2/pd2data.mpq`; no patch-note values are layered on top. Seven tables and the generated English names changed since the merged October 22 snapshot. The original Season 13 directory remains intact.
 
-The active installation and `ProjectD2/Live/pd2data.mpq` had the same SHA-256. The directory named `Beta` still contained November 2025 files and was deliberately excluded. [`SOURCE_MANIFEST.json`](SOURCE_MANIFEST.json) records archive/DLL hashes, normalized text hashes, row counts, schemas, and generated-file provenance. The beta is a dated snapshot, not a promise that subsequent beta or release builds are identical.
+The active installation and `ProjectD2/Live` archives/DLLs match each other and the launcher's local metadata. The directory named `Beta` still contained November 2025 files and was deliberately excluded. [`SOURCE_MANIFEST.json`](SOURCE_MANIFEST.json) records archive/DLL hashes, normalized text hashes, row counts, schemas, and generated-file provenance. This is a dated installed snapshot; later builds require another extraction.
+
+## October 23 reconciliation
+
+- Tornado's physical damage tiers are now **6/14/22/30/38 minimum** and **8/16/24/32/40 maximum**, with **14%** synergy per invested point. Twister, Tornado and Shock Wave also receive expected Critical/Deadly Strike bonuses, as explicitly allowed by the installed DLL. Other spells retain their existing strike rules; attack aura physical ED and elemental weapon payloads do not become spell damage.
+- Tornado/Twister next-hit delay is **9 frames**; Fire Arrow ground duration is **50 frames**. These source changes do not establish collision frequency or overlap. Static Field variants use **8%**; a complete current-life Static Field damage sequence is outside the existing fixed-payload model.
+- Updated monster resistances, boss life, innate modifiers and English names come directly from the target tables. Map 209 is **The Fortress of Aranoch**, with **seven** selectable species. Decaying Swamplands' existing six-species curated pool is restored to area selection.
+- Source metadata also includes Blade Fury's removed per-point pierce, PvP trap limits and new boss/missile records. Unmodeled pierce/collision and PvP behavior are not inferred from those cells. PvE Crushing Blow constants were checked against the updated DLL.
+- Character payload and target HTTP cache versions are **`damage-model-v16`** and **`season-14-v4`**. See [BETA_VALIDATION.md](BETA_VALIDATION.md) for native evidence, numeric fixtures and fresh QA.
+
+These changes agree with the developer's [Open Beta Patch 2 announcement](https://www.reddit.com/r/ProjectDiablo2/comments/1xcu7qa/season_14_open_beta_patch_2/); installed files remain the numeric source of truth.
 
 ## Sources used by the calculator
 
@@ -53,4 +63,4 @@ See [BETA_VALIDATION.md](BETA_VALIDATION.md) for current verification and [EFFEC
 
 The source files establish payloads and formulas, not complete realm-server behavior. Collision, travel time, secondary hit overlap, pack affixes, generated summon equipment and corpse-life explosion damage remain limited as described in the effective model. Observed rates are still required for AI, periodic and movement-controlled skills. Fire Claws ground cadence follows the beta tooltip convention; overlap and coverage remain explicit scenario assumptions, not measured server telemetry.
 
-The beta contains runtime changes such as Thorns' reactive second bleed stack, phasing and missile collision behavior. Their source definitions are preserved, but an unverified event implementation is not guessed. The updated ProjectDiablo DLL hash is recorded; importing tables does not independently revalidate every native combat hook. Item rolls continue to come from armory payloads rather than new item-generation tables.
+The patch contains runtime changes such as Thorns' reactive second bleed stack, phasing and missile collision behavior. Their source definitions are preserved, but an unverified event implementation is not guessed. The updated ProjectDiablo DLL hash and targeted strike/Crushing Blow checks are recorded; this does not independently revalidate every native combat hook. Item rolls continue to come from armory payloads rather than new item-generation tables.

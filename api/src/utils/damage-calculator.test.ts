@@ -421,8 +421,8 @@ describe("Season 14 patch damage regressions", () => {
       skill: "Tornado",
       element: "physical",
       base: [35, 39],
-      min: [7, 15, 24, 33, 42],
-      max: [9, 18, 26, 35, 44],
+      min: [6, 14, 22, 30, 38],
+      max: [8, 16, 24, 32, 40],
     },
     {
       skill: "Hurricane",
@@ -480,6 +480,7 @@ describe("Season 14 patch damage regressions", () => {
       { min: 7, max: 30 },
     ],
     ["Hurricane", ["Arctic Blast", "Tornado"], "cold", { min: 31, max: 63 }],
+    ["Tornado", ["Arctic Blast", "Twister", "Hurricane"], "physical", { min: 49, max: 55 }],
     ["Combustion", ["Fire Bolt", "Fire Ball"], "fire", { min: 14, max: 34 }],
     [
       "Poison Nova",

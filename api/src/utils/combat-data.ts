@@ -134,7 +134,9 @@ export function getCombatCatalog(): CombatCatalog {
         ),
       ]),
     }))
-    .filter((area) => area.monsters.some((list) => list.length) && (!area.map || curated.maps.some((map) => map.id === area.id)));
+    .filter((area) => area.map
+      ? curated.maps.some((map) => map.id === area.id)
+      : area.monsters.some((list) => list.length));
   for (const area of areas.filter((entry) => entry.map)) {
     const map = curated.maps.find((entry) => entry.id === area.id);
     if (map) area.monsters = [[], [], [...map.monsterIds]];

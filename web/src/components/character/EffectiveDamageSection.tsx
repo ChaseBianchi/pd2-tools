@@ -42,6 +42,7 @@ const format = (n: number | null) =>
     : n.toLocaleString("en-US", { maximumFractionDigits: 1 });
 const range = (r: { min: number; max: number }) =>
   `${format(r.min)} – ${format(r.max)}`;
+const targetCatalogVersion = "season-14-v4";
 const effectNames = [
   "Amplify Damage",
   "Decrepify",
@@ -68,8 +69,8 @@ export function EffectiveDamageSection({
   );
   const [detailId, setDetailId] = useState<string | null>(null);
   const catalog = useQuery({
-    queryKey: ["damage-targets", "season-14-v3"],
-    queryFn: () => apiClient.get<CombatCatalog>("/characters/damage-targets"),
+    queryKey: ["damage-targets", targetCatalogVersion],
+    queryFn: () => apiClient.get<CombatCatalog>("/characters/damage-targets", { version: targetCatalogVersion }),
     enabled: mode !== "none",
     staleTime: Infinity,
   });

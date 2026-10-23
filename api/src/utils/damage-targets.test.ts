@@ -89,6 +89,34 @@ describe("source-backed target catalog", () => {
     expect(monster("mephisto").difficulties.normal.resistances).toEqual({ physical: 0, magic: 0, fire: 33, cold: 25, lightning: 33, poison: 50 });
     expect(monster("mephisto").difficulties.hell.resistances).toEqual({ physical: 20, magic: 50, fire: 75, cold: 75, lightning: 75, poison: 75 });
   });
+  it.each([
+    ["unraveler1DemonRoad", "lightning", 65],
+    ["goatman3DemonRoad", "lightning", 120],
+    ["skmage_ltng1Kyovoshad", "lightning", 120],
+    ["zealot1Kyovoshad", "fire", 120],
+    ["wraith4Kyovoshad", "magic", 105],
+    ["vampire1Market", "fire", 75],
+    ["flyingscimitarMarket", "fire", 120],
+    ["fetish3Ash", "cold", 120],
+  ] as const)("reads launch-patch %s %s resistance", (id, element, expected) => {
+    expect(monster(id).difficulties.hell.resistances[element]).toBe(expected);
+  });
+  it("uses the revised map bosses and drops the obsolete Dark Temple aura", () => {
+    expect(monster("DarkTempleBoss").name).toBe("Son of Rakkis");
+    expect(monster("DarkTempleBoss").difficulties.hell.notes).toEqual([]);
+    expect(monster("DescentBoss").name).toBe("Tainted Child of Bul-Kathos");
+    expect(monster("DescentBoss").difficulties.hell.resistances)
+      .toEqual({ physical: 20, magic: 20, fire: 50, cold: 50, lightning: 50, poison: 50 });
+    const combat = getCombatCatalog();
+    expect(combat.monsters.find((target) => target.id === "DarkTempleBoss")!.life[2]).toEqual({ min: 8500, max: 8500 });
+    expect(combat.monsters.find((target) => target.id === "DescentBoss")!.life[2]).toEqual({ min: 8000, max: 8000 });
+  });
+  it("removes flying scimitars from the Dark Temple pool without removing their target record", () => {
+    const map = catalog.maps.find((map) => map.id === "209")!;
+    expect(map.monsterIds).toHaveLength(7);
+    expect(map.monsterIds).not.toContain("flyingscimitarDarkTemple");
+    expect(monster("flyingscimitarDarkTemple")).toBeDefined();
+  });
   it("reads absorption and poison length reduction from MonProp with difficulty-specific columns", () => {
     const clone = monster("uberdiablonew");
     expect(clone.difficulties.hell.absorbFlat.fire).toBe(8);

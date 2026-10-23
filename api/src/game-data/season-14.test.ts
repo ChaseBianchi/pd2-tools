@@ -41,6 +41,12 @@ describe("extracted Season 14 beta source tables", () => {
     ["Skills.txt", "Twister", "MaxLevDam5", "70"],
     ["Skills.txt", "Tornado", "MinDam", "35"],
     ["Skills.txt", "Tornado", "MaxDam", "39"],
+    ["Skills.txt", "Tornado", "Param8", "14"],
+    ["Skills.txt", "Tornado", "MinLevDam5", "38"],
+    ["Skills.txt", "Blade Fury", "Param5", "0"],
+    ["Skills.txt", "Static Field", "Param4", "8"],
+    ["Skills.txt", "Merc Static Field", "Param4", "8"],
+    ["Skills.txt", "Static Field Proc", "Param4", "8"],
     ["Skills.txt", "Fire Claws", "HitShift", "8"],
     ["Skills.txt", "Fire Claws", "EMin", "11"],
     ["Skills.txt", "Fire Claws", "EMax", "17"],
@@ -55,6 +61,9 @@ describe("extracted Season 14 beta source tables", () => {
     ["Missiles.txt", "royalstrikemeteor", "EMin", "24"],
     ["Missiles.txt", "royalstrikechaosice", "MinELev5", "56"],
     ["Missiles.txt", "clawfirestorm", "NextDelay", "5"],
+    ["Missiles.txt", "tornado", "NextDelay", "9"],
+    ["Missiles.txt", "twister", "NextDelay", "9"],
+    ["Missiles.txt", "firearrow firewall", "Range", "50"],
     ["SkillDesc.txt", "fire claws", "desccalca2", "(enma * 5)/2"],
     ["SkillDesc.txt", "combustion", "desccalca6", "63"],
     ["ItemStatCost.txt", "phasing", "Stat", "phasing"],
@@ -64,6 +73,9 @@ describe("extracted Season 14 beta source tables", () => {
     ["CharStats.txt", "Druid", "ManaPerMagic", "8"],
     ["Levels.txt", "Library Map", "MonLvl3Ex", "87"],
     ["Levels.txt", "Dark Temple Map", "Id", "209"],
+    ["Levels.txt", "Dark Temple Map", "NumMon", "7"],
+    ["MonStats.txt", "DescentBoss", "MinHP(H)", "8000"],
+    ["MonStats.txt", "DarkTempleBoss", "MinHP(H)", "8500"],
   ])("retains beta %s %s %s", (name, key, column, expected) => {
     expect(cell(name, key, column)).toBe(expected);
   });

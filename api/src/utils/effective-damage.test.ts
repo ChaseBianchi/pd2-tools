@@ -154,6 +154,16 @@ describe("effective damage: independent arithmetic and boundaries", () => {
     }
     expect(catalog.areas.some((a) => ["202","203","204","205","206"].includes(a.id))).toBe(false);
   });
+  it("keeps every curated Hell map pool selectable after spawn IDs are consolidated", () => {
+    const catalog = getCombatCatalog();
+    const swamp = catalog.areas.find((area) => area.id === "162")!;
+    expect(swamp.name).toBe("Decaying Swamplands");
+    expect(swamp.map).toBe(true);
+    expect(swamp.monsters).toEqual([[], [], expect.arrayContaining([
+      "unraveler3Rat", "bonefetish4Rat", "mummy5Rat", "willowisp1Rat", "skmage_fire3Rat", "overseerRat",
+    ])]);
+    expect(swamp.monsters[2]).toHaveLength(6);
+  });
   it("keeps the browser and API model and contracts byte-identical for isolated Docker builds", () => {
     for (const file of ["utils/effective-damage.ts", "types/combat.ts"])
       expect(
