@@ -27,3 +27,4 @@ export * from "./services";
 
 // Damage types
 export * from "./damage";
+export * from "./combat";

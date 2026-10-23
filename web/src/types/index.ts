@@ -4,3 +4,4 @@ export * from "./statistics";
 export * from "./constants";
 export * from "./ui";
 export * from "./damage";
+export * from "./combat";

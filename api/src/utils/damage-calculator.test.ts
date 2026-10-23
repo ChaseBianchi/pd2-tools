@@ -15,7 +15,7 @@ const gameDataPath = path.resolve(
   "src",
   "game-data",
   "pd2",
-  "season-13"
+  "season-14"
 );
 const hasRequiredGameData = requiredGameFiles.every((fileName) =>
   fs.existsSync(path.join(gameDataPath, fileName))
@@ -365,6 +365,337 @@ function createCharacter(skillName: string, level: number): CharacterData {
   } as unknown as CharacterData;
 }
 
+describe("Season 14 patch damage regressions", () => {
+  beforeAll(async () => {
+    ({ calculateDamage } = await import("./damage-calculator"));
+  });
+
+  function patchProfile(
+    skill: string,
+    level: number,
+    synergies: string[] = []
+  ) {
+    const character = createCharacter(skill, level);
+    if (
+      ["Jab", "Power Strike", "Charged Strike", "Lightning Strike"].includes(
+        skill
+      )
+    ) {
+      character.character.class = { id: 0, name: "Amazon" };
+      character.items[0].base = {
+        ...character.items[0].base,
+        id: "spr",
+        type: "Spear",
+        type_code: "spea",
+      };
+      character.items[0].base_code = "spr";
+    }
+    character.character.skills.push(
+      ...synergies.map((name, index) => ({ id: 600 + index, name, level: 1 }))
+    );
+    character.realSkills.push(
+      ...synergies.map((name) => ({ skill: name, level: 20, baseLevel: 1 }))
+    );
+    return calculateDamage(character).profiles.find(
+      (profile) => profile.skillId === skill && profile.playerAuraId === "none"
+    )!;
+  }
+
+  // Independently transcribed beta values, rather than reading the tables under test.
+  const spellCases = [
+    {
+      skill: "Fissure",
+      element: "fire",
+      base: [15, 25],
+      min: [4, 8, 14, 22, 28],
+      max: [6, 10, 16, 24, 30],
+    },
+    {
+      skill: "Twister",
+      element: "physical",
+      base: [6.5, 9],
+      min: [2, 4, 10.5, 22, 34],
+      max: [3.5, 5, 11.5, 23, 35],
+    },
+    {
+      skill: "Tornado",
+      element: "physical",
+      base: [35, 39],
+      min: [7, 15, 24, 33, 42],
+      max: [9, 18, 26, 35, 44],
+    },
+    {
+      skill: "Hurricane",
+      element: "cold",
+      base: [25, 50],
+      min: [4, 8, 12, 16, 20],
+      max: [7, 11, 15, 19, 23],
+    },
+    {
+      skill: "Poison Nova",
+      element: "poison",
+      base: [50, (29 * 50) / 16],
+      min: [6, 7, 8, 9, 9].map((v) => (v * 50) / 16),
+      max: [6, 7, 8, 9, 9].map((v) => (v * 50) / 16),
+    },
+  ];
+
+  it.each(spellCases)(
+    "uses $skill damage at every scaling boundary",
+    ({ skill, element, base, min, max }) => {
+      for (const level of [1, 8, 9, 16, 17, 22, 23, 28, 29, 40, 60]) {
+        const tiers = [
+          Math.min(level - 1, 7),
+          Math.max(0, Math.min(level - 8, 8)),
+          Math.max(0, Math.min(level - 16, 6)),
+          Math.max(0, Math.min(level - 22, 6)),
+          Math.max(0, level - 28),
+        ];
+        const expected = {
+          min: Math.floor(
+            base[0] + tiers.reduce((sum, count, i) => sum + count * min[i], 0)
+          ),
+          max: Math.floor(
+            base[1] + tiers.reduce((sum, count, i) => sum + count * max[i], 0)
+          ),
+        };
+        expect(
+          patchProfile(skill, level).damageTotals.byElement[element]
+        ).toEqual(expected);
+      }
+    }
+  );
+
+  it.each([
+    [
+      "Charged Strike",
+      ["Lightning Strike", "Power Strike"],
+      "lightning",
+      { min: 8, max: 48 },
+    ],
+    [
+      "Lightning Strike",
+      ["Charged Strike", "Power Strike"],
+      "lightning",
+      { min: 7, max: 30 },
+    ],
+    ["Hurricane", ["Arctic Blast", "Tornado"], "cold", { min: 31, max: 63 }],
+    ["Combustion", ["Fire Bolt", "Fire Ball"], "fire", { min: 14, max: 34 }],
+    [
+      "Poison Nova",
+      ["Poison Dagger", "Desecrate"],
+      "poison",
+      { min: 60, max: 110 },
+    ],
+  ])(
+    "uses hard-point synergies for %s",
+    (skill, synergies, element, expected) => {
+      expect(
+        patchProfile(skill, 1, synergies).damageTotals.byElement[element]
+      ).toEqual(expected);
+    }
+  );
+
+  it("updates Frost Nova synergies without counting soft points", () => {
+    expect(
+      patchProfile("Frost Nova", 8, ["Ice Bolt", "Shiver Armor"]).damageTotals
+        .byElement.cold
+    ).toEqual({ min: 20, max: 26 });
+  });
+
+  it("updates both Power Strike payloads without adding hidden weapon enhanced damage", () => {
+    const profile = patchProfile("Power Strike", 8, [
+      "Lightning Bolt",
+      "Lightning Strike",
+    ]);
+    expect(profile.breakdown.physicalBonusPercent.selectedSkill).toBe(0);
+    expect(
+      profile.damageComponents.find((component) =>
+        component.sourceRefs.some(
+          (ref) => ref.row === "Power Strike" && ref.columns.includes("EMin")
+        )
+      )?.damage
+    ).toEqual({ min: 1, max: 33 });
+    expect(
+      profile.damageComponents.find((component) =>
+        component.sourceRefs.some((ref) => ref.row === "powerstrikenova2")
+      )?.damage
+    ).toEqual({ min: 1, max: 46 });
+  });
+
+  it.each([
+    [1, 50, 5],
+    [20, 126, 24],
+    [25, 146, 25],
+    [40, 206, 25],
+  ])(
+    "updates Multiple Shot damage and arrow count at level %s",
+    (level, damagePercent, arrows) => {
+      const character = createCharacter("Multiple Shot", level);
+      character.items = [createBow()];
+      const profile = calculateDamage(character).profiles.find(
+        (candidate) =>
+          candidate.skillId === "Multiple Shot" &&
+          candidate.playerAuraId === "none"
+      )!;
+      expect(profile.breakdown.physicalBonusPercent.selectedSkill).toBe(
+        damagePercent
+      );
+      expect(profile.damageScope.count).toBe(arrows);
+      expect(profile.totalPhysicalDamage).toEqual({
+        min: Math.floor(10 * (1 + damagePercent / 100)),
+        max: Math.floor(20 * (1 + damagePercent / 100)),
+      });
+    }
+  );
+
+  it.each([
+    ["Jab", ["Fend"], 327],
+    ["Leap Attack", ["Leap", "Bash"], 450],
+  ])(
+    "updates %s enhanced damage and synergies",
+    (skill, synergies, expected) => {
+      expect(
+        patchProfile(skill, 20, synergies).breakdown.physicalBonusPercent
+          .selectedSkill
+      ).toBe(expected);
+    }
+  );
+
+  it("replaces the Cold Enchant synergy on each cold armor", () => {
+    for (const [skill, synergy, expected] of [
+      ["Shiver Armor", "Frost Nova", { min: 9, max: 12 }],
+      ["Chilling Armor", "Blizzard", { min: 6, max: 8 }],
+    ]) {
+      expect(
+        patchProfile(skill, 1, [synergy]).damageTotals.byElement.cold
+      ).toEqual(expected);
+      expect(
+        patchProfile(skill, 1, ["Cold Enchant"]).damageTotals.byElement.cold
+      ).toEqual(patchProfile(skill, 1).damageTotals.byElement.cold);
+    }
+  });
+
+  it("updates Phoenix Strike meteor and ice tiers without changing its lightning or ground fire", () => {
+    for (const level of [1, 8, 9, 16, 17, 22, 23, 28, 29, 60]) {
+      const character = createCharacter("Phoenix Strike", level);
+      character.character.class = { id: 6, name: "Assassin" };
+      character.character.skills.push({
+        id: 259,
+        name: "Fists of Fire",
+        level: 1,
+      });
+      character.realSkills.push({
+        skill: "Fists of Fire",
+        level: 20,
+        baseLevel: 1,
+      });
+      character.items[0].base = {
+        ...character.items[0].base,
+        id: "ktr",
+        type: "Katar",
+        type_code: "h2h",
+      };
+      const profiles = calculateDamage(character).profiles.filter(
+        (profile) =>
+          profile.skillId === "Phoenix Strike" &&
+          profile.playerAuraId === "none"
+      );
+      const meteor = profiles
+        .find((profile) => profile.chargeNumber === 1)!
+        .damageComponents.find((component) =>
+          component.sourceRefs.some((ref) => ref.row === "royalstrikemeteor")
+        )!;
+      const ice = profiles
+        .find((profile) => profile.chargeNumber === 3)!
+        .damageComponents.find((component) =>
+          component.sourceRefs.some((ref) => ref.row === "royalstrikechaosice")
+        )!;
+      const tiers = [
+        Math.min(level - 1, 7),
+        Math.max(0, Math.min(level - 8, 8)),
+        Math.max(0, Math.min(level - 16, 6)),
+        Math.max(0, Math.min(level - 22, 6)),
+        Math.max(0, level - 28),
+      ];
+      expect(meteor.damage).toEqual({
+        min: Math.floor(
+          (24 +
+            tiers.reduce(
+              (sum, count, i) => sum + count * [12, 23, 35, 46, 55][i],
+              0
+            )) *
+            1.1
+        ),
+        max: Math.floor(
+          (48 +
+            tiers.reduce(
+              (sum, count, i) => sum + count * [12, 25, 40, 50, 60][i],
+              0
+            )) *
+            1.1
+        ),
+      });
+      expect(ice.damage).toEqual({
+        min:
+          32 +
+          tiers.reduce(
+            (sum, count, i) => sum + count * [8, 16, 24, 40, 56][i],
+            0
+          ),
+        max:
+          64 +
+          tiers.reduce(
+            (sum, count, i) => sum + count * [8, 16, 26, 42, 58][i],
+            0
+          ),
+      });
+    }
+    const before = fs
+      .readFileSync(
+        path.join(gameDataPath, "../season-13/Missiles.txt"),
+        "utf8"
+      )
+      .split(/\r?\n/);
+    const after = fs
+      .readFileSync(path.join(gameDataPath, "Missiles.txt"), "utf8")
+      .split(/\r?\n/);
+    for (const row of ["royalstrikechainlightning", "royalstrikemeteorfire"]) {
+      expect(after.find((line) => line.startsWith(`${row}\t`))).toBe(
+        before.find((line) => line.startsWith(`${row}\t`))
+      );
+    }
+  });
+
+  it("applies the new one-handed critical cap and two-handed mastery damage", () => {
+    const oneHand = createCharacter("One Hand Mastery", 60);
+    oneHand.character.class = { id: 4, name: "Barbarian" };
+    const oneHandProfile = calculateDamage(oneHand).profiles.find(
+      (profile) =>
+        profile.skillId === "Basic Attack" && profile.playerAuraId === "none"
+    )!;
+    expect(oneHandProfile.strikeBreakdowns[0].criticalChance).toBe(45);
+    for (const [level, expected] of [
+      [1, 40],
+      [20, 230],
+    ]) {
+      const twoHand = createCharacter("Two Hand Mastery", level);
+      twoHand.character.class = { id: 4, name: "Barbarian" };
+      twoHand.items[0].damage = {
+        one_handed: {},
+        two_handed: { minimum: 10, maximum: 20 },
+        missile: {},
+      };
+      const profile = calculateDamage(twoHand).profiles.find(
+        (candidate) =>
+          candidate.skillId === "Basic Attack" &&
+          candidate.playerAuraId === "none"
+      )!;
+      expect(profile.breakdown.physicalBonusPercent.passive).toBe(expected);
+    }
+  });
+});
+
 const describeWithGameData = hasRequiredGameData ? describe : describe.skip;
 const describeWithArmorData =
   hasRequiredGameData && fs.existsSync(path.join(gameDataPath, "Armor.txt"))
@@ -661,12 +992,12 @@ function getExpectedVenomPoisonPayloadFromSkillsTxt(
   const synergyPercent =
     cobraStrikeBaseLevel * getGameFileNumber(skills, row, "Param8");
   const withSynergy = {
-    min: Math.floor(min * durationFrames * (1 + synergyPercent / 100)),
-    max: Math.floor(max * durationFrames * (1 + synergyPercent / 100)),
+    min: Math.floor(min * 256 * (100 + synergyPercent) / 100),
+    max: Math.floor(max * 256 * (100 + synergyPercent) / 100),
   };
   const damage = {
-    min: Math.floor(withSynergy.min * (1 + poisonSkillDamage / 100)),
-    max: Math.floor(withSynergy.max * (1 + poisonSkillDamage / 100)),
+    min: Math.floor(Math.floor(withSynergy.min * (100 + poisonSkillDamage) / 100) * durationFrames / 256),
+    max: Math.floor(Math.floor(withSynergy.max * (100 + poisonSkillDamage) / 100) * durationFrames / 256),
   };
 
   return {
@@ -709,10 +1040,10 @@ function getExpectedHydraFirePayloadFromSkillsTxt(
 
   return {
     min: Math.floor(
-      Math.floor(min * (1 + synergyPercent / 100)) * (1 + masteryPercent / 100)
+      Math.floor(min * 256 * (100 + synergyPercent) / 100) * (100 + masteryPercent) / 25600
     ),
     max: Math.floor(
-      Math.floor(max * (1 + synergyPercent / 100)) * (1 + masteryPercent / 100)
+      Math.floor(max * 256 * (100 + synergyPercent) / 100) * (100 + masteryPercent) / 25600
     ),
   };
 }
@@ -727,17 +1058,18 @@ function getExpectedSkeletalMagePayloadFromGameFiles(
   const mageRow = skills.rowsByKey.get("Raise Skeletal Mage")!;
   const masteryRow = skills.rowsByKey.get("Skeleton Mastery")!;
   const missileRow = missiles.rowsByKey.get(missileName)!;
+  const missileLevel = skeletonMasteryLevel + Math.max(0, Math.floor((mageLevel - 2) / 2));
   const min = getSourceLevelScaledValue(
     missiles,
     missileRow,
-    mageLevel,
+    Math.max(1, missileLevel),
     "EMin",
     ["MinELev1", "MinELev2", "MinELev3", "MinELev4", "MinELev5"]
   );
   const max = getSourceLevelScaledValue(
     missiles,
     missileRow,
-    mageLevel,
+    Math.max(1, missileLevel),
     "Emax",
     ["MaxELev1", "MaxELev2", "MaxELev3", "MaxELev4", "MaxELev5"]
   );
@@ -814,24 +1146,6 @@ function getExpectedPlaguePoppyPoisonPayloadFromGameFiles({
   };
 }
 
-function getExpectedSkillLinearAliasFromGameFiles(
-  skillName: string,
-  level: number,
-  expression: string
-) {
-  const skills = loadGameFile("Skills.txt", "skill");
-  const match = expression.match(/^skill\('([^']+)'\.ln([1-8])([1-8])\)$/);
-
-  expect(match?.[1]).toBe(skillName);
-
-  const row = skills.rowsByKey.get(skillName)!;
-  return (
-    getGameFileNumber(skills, row, `Param${match![2]}`) +
-    Math.max(0, level - 1) *
-      getGameFileNumber(skills, row, `Param${match![3]}`)
-  );
-}
-
 function getExpectedSummonPhysicalPayloadFromGameFiles(
   skillName: string,
   level: number
@@ -886,9 +1200,7 @@ function getExpectedSkeletonDamagePercentFromGameFiles({
         : (skillLevel - 3) * getGameFileNumber(skills, row, "Param3");
     total += skeletonArcherBaseLevel * getGameFileNumber(skills, row, "Param7");
   } else {
-    expect(getGameFileCell(skills, row, "DmgSymPerCalc")).toBe(
-      getGameFileCell(skills, row, "passivecalc4")
-    );
+    expect(getGameFileCell(skills, row, "DmgSymPerCalc")).toBe("");
     total += raiseSkeletonBaseLevel * getGameFileNumber(skills, row, "Param7");
   }
 
@@ -969,6 +1281,398 @@ function getExpectedSkeletonArcherDirectPhysicalFromGameFiles({
 describeWithGameData("damage calculator component model", () => {
   beforeAll(async () => {
     ({ calculateDamage } = await import("./damage-calculator"));
+  });
+
+  it("treats beta Warmth as flat AR and updates it through Battle Command", () => {
+    const character = createCharacter("Warmth", 20);
+    character.character.class = { id: 1, name: "Sorceress" };
+    character.character.attributes.dexterity = 100;
+    const calculation = calculateDamage(character);
+    const weapon = calculation.combat.weapons[calculation.weaponOptions[0].id];
+    // 5 * dex - 35 + Sorceress ToHitFactor(-15) + Warmth(20 + 19 * 10).
+    expect(weapon.baseAttackRating).toBe(660);
+    expect(weapon.mastery).toEqual(Array(8).fill(0));
+    expect(weapon.skillBonuses.map((bonus) => bonus.baseAttackRating)).toEqual(
+      [0, 10, 20, 30, 40, 50, 60, 70]
+    );
+  });
+
+  it("reads Poison Strike pierce from the beta temporary aura without making it a permanent passive", () => {
+    const character = createCharacter("Poison Strike", 20);
+    character.character.class = { id: 2, name: "Necromancer" };
+    const combat = calculateDamage(character).combat;
+    expect(combat.skills["Poison Strike"].levels[20].pierce.poison).toBe(24);
+    expect(combat.skills["Poison Strike"].levels[60].pierce.poison).toBe(50);
+    for (const weapon of Object.values(combat.weapons))
+      expect(weapon.pierce.poison).toBe(0);
+  });
+
+  it.each([
+    [1, { min: 11, max: 17 }, { min: 12, max: 22 }],
+    [20, { min: 104, max: 137 }, { min: 130, max: 167 }],
+  ])("separates beta Fire Claws melee and source-tooltip ground DPS at level %s", (level, hit, ground) => {
+    const calculation = calculateDamage(createCharacter("Fire Claws", level));
+    const profile = calculation.profiles.find((p) => p.skillId === "Fire Claws" && p.playerAuraId === "none");
+    expect(profile.damageComponents.find((c) => c.source === "skill" && c.damageType === "fire")).toMatchObject({damage: hit, timing: "instant"});
+    expect(profile.damageComponents.find((c) => c.sourceRefs.some((r) => r.row === "clawfirestorm"))).toMatchObject({damage: ground, timing: "over_time", includedInTotal: false});
+  });
+
+  it("uses beta temporary attack-speed stats for Split Throw and Double Swing", () => {
+    const character = createCharacter("Split Throw", 20);
+    character.character.class = { id: 4, name: "Barbarian" };
+    character.character.skills.push({ id: 133, name: "Double Swing", level: 20 });
+    character.realSkills.push({ skill: "Double Swing", level: 20, baseLevel: 20 });
+    const combat = calculateDamage(character).combat;
+    expect(combat.skills["Split Throw"].levels[20].attackSpeed).toBe(10);
+    expect(combat.skills["Double Swing"].levels[20].attackSpeed).toBe(50);
+  });
+
+  it("resolves live Poison Strike names for attack profiles and Poison Nova synergies", () => {
+    const character = createCharacter("Poison Nova", 20);
+    character.character.class = { id: 2, name: "Necromancer" };
+    character.character.skills = [
+      { id: 73, name: "Poison Strike", level: 20 },
+      { id: 83, name: "Desecrate", level: 20 },
+      { id: 92, name: "Poison Nova", level: 20 },
+    ];
+    character.realSkills = character.character.skills.map((skill) => ({
+      skill: skill.name,
+      level: skill.level,
+      baseLevel: skill.level,
+    }));
+    character.items[0].base = {
+      ...character.items[0].base,
+      id: "dgr",
+      type: "Knife",
+      type_code: "knif",
+    };
+    const calculation = calculateDamage(character);
+    const strike = calculation.profiles.find(
+      (profile) =>
+        profile.skillId === "Poison Strike" && profile.playerAuraId === "none"
+    );
+    expect(strike).toBeDefined();
+    expect(
+      strike.damageComponents.some((component) =>
+        component.sourceRefs.some((ref) => ref.row === "Poison Dagger")
+      )
+    ).toBe(true);
+    const nova = calculation.profiles.find(
+      (profile) =>
+        profile.skillId === "Poison Nova" && profile.playerAuraId === "none"
+    );
+    expect(nova.damageTotals.byElement.poison).toEqual({
+      min: 2463,
+      max: 2683,
+    });
+  });
+
+  it("does not present Holy Sword's buff fields as direct spell damage", () => {
+    const character = createCharacter("Holy Sword", 20);
+    character.character.class = { id: 3, name: "Paladin" };
+    const calculation = calculateDamage(character);
+    expect(
+      calculation.skillOptions.some((skill) => skill.id === "Holy Sword")
+    ).toBe(false);
+    expect(
+      calculation.profiles.some((profile) => profile.skillId === "Holy Sword")
+    ).toBe(false);
+  });
+
+  it("keeps requested aura levels consistent across weapon sets", () => {
+    const character = createCharacter("Heart of Wolverine", 20);
+    character.character.class = { id: 5, name: "Druid" };
+    character.items.push(
+      createWeapon({
+        id: "buff-swap",
+        hash: "buff-swap",
+        properties: ["+5 to All Skills"],
+        location: {
+          ...createWeapon().location,
+          equipment: "Right Hand Switch",
+        },
+      })
+    );
+    const calculation = calculateDamage(character);
+    const aura = calculation.playerAuraOptions.find(
+      (option) => option.id === "Heart of Wolverine"
+    );
+    expect(aura.level).toBe(25);
+    const primary = calculation.profiles.find(
+      (profile) =>
+        profile.skillId === "Basic Attack" &&
+        profile.weaponId.startsWith("primary:") &&
+        profile.playerAuraId === aura.id &&
+        profile.playerAuraCarrier === "self"
+    );
+    expect(primary.selectedPlayerAura.level).toBe(primary.playerAuraLevel);
+    expect(primary.activeAuras[0].level).toBe(25);
+    expect(primary.breakdown.physicalBonusPercent.activeAuras).toBe(
+      aura.selfLevelBonuses.find((bonus) => bonus.level === 25)
+        .physicalBonusPercent
+    );
+  });
+
+  it("provides caster and weapon-set damage for stacked owned elemental buffs", () => {
+    const character = createCharacter("Enchant", 20);
+    character.character.class = { id: 1, name: "Sorceress" };
+    character.character.skills.push({ id: 37, name: "Warmth", level: 20 });
+    character.realSkills.push({ skill: "Warmth", level: 20, baseLevel: 20 });
+    character.character.skills.push({ id: 62, name: "Hydra", level: 20 });
+    character.realSkills.push({ skill: "Hydra", level: 20, baseLevel: 20 });
+    character.realStats.fireSkillDamage = 40;
+    const calculation = calculateDamage(character);
+    const enchant = calculation.playerAuraOptions.find(
+      (option) => option.id === "Enchant"
+    );
+    for (const weaponSet of ["primary", "secondary"]) {
+      const profile = calculation.profiles.find(
+        (profile) =>
+          profile.skillId === "Basic Attack" &&
+          profile.weaponId.startsWith(`${weaponSet}:`) &&
+          profile.playerAuraId === "Enchant" &&
+          profile.playerAuraCarrier === "self"
+      );
+      const payload = profile.damageComponents.find(
+        (component) =>
+          component.source === "aura" && component.damageType === "fire"
+      ).damage;
+      expect(
+        enchant.selfLevelBonusesByWeaponSet[weaponSet].find(
+          (bonus) => bonus.level === enchant.level
+        ).elementalDamage.fire
+      ).toEqual(payload);
+      if (weaponSet === "primary") {
+        const summon = calculation.profiles.find(
+          (profile) =>
+            profile.skillId === "Hydra" &&
+            profile.weaponId.startsWith(`${weaponSet}:`) &&
+            profile.playerAuraId === "Enchant" &&
+            profile.playerAuraCarrier === "party"
+        );
+        const summonPayload = summon.damageComponents.find(
+          (component) =>
+            component.source === "aura" && component.damageType === "fire"
+        ).damage;
+        expect(
+          enchant.summonLevelBonusesByWeaponSet[weaponSet].find(
+            (bonus) => bonus.level === enchant.level
+          ).elementalDamage.fire
+        ).toEqual(summonPayload);
+      }
+    }
+    expect(
+      enchant.selfLevelBonusesByWeaponSet.primary.find(
+        (bonus) => bonus.level === 20
+      ).elementalDamage.fire.max
+    ).toBeGreaterThan(
+      enchant.selfLevelBonuses.find((bonus) => bonus.level === 20)
+        .elementalDamage.fire.max
+    );
+  });
+
+  it("decodes combat item stats, per-level attack rating, and offensive aura carriers", () => {
+    const character = createCharacter("Basic Attack", 1);
+    character.realStats.dexterity = 100;
+    character.items[0].modifiers = [
+      modifier("item_tohit_perlevel", [6]),
+      modifier("item_ignoretargetac", [1]),
+      modifier("item_fractionaltargetac", [25]),
+    ];
+    const calculation = calculateDamage(character);
+    const weapon = calculation.combat.weapons[calculation.weaponOptions[0].id];
+    expect(weapon.baseAttackRating).toBe(5 * 100 - 35 + 5 + 90 * 6);
+    expect(weapon.ignoreDefense).toBe(true);
+    expect(weapon.targetDefensePercent).toBe(25);
+    expect(weapon.undeadDamage).toBe(50);
+    expect(
+      calculation.combat.effects["Inner Sight"][20].attackRatingPercent
+    ).toBe(0);
+    expect(
+      calculation.combat.effects["Holy Fire"][20].attackRatingPercent
+    ).toBe(0);
+    expect(
+      calculation.combat.effects["Holy Fire"][20].selfAttackRatingPercent
+    ).toBe(145);
+    expect(calculation.combat.effects["Holy Freeze"][20].attackSpeed).toBe(0);
+    expect(calculation.combat.effects.Sanctuary[1].reductions.magic).toBe(5);
+    expect(calculation.combat.effects.Sanctuary[3].reductions.magic).toBe(6);
+    expect(calculation.combat.effects.Decrepify[1].reductions.physical).toBe(
+      10
+    );
+    expect(calculation.combat.effects.Decrepify[21].reductions.physical).toBe(
+      20
+    );
+  });
+
+  it("shares global FCR/pierce across weapons while keeping hand-local attack stats separate", () => {
+    const character = createCharacter("War Cry", 20);
+    character.character.class = { id: 4, name: "Barbarian" };
+    character.items[0].modifiers = [
+      modifier("item_fastercastrate", [40]),
+      modifier("passive_fire_pierce", [5]),
+      modifier("item_crushingblow", [10]),
+    ];
+    character.items.push(
+      createWeapon({
+        id: 2,
+        hash: "offhand-caster",
+        location: {
+          zone: "Equipped",
+          storage: "Equipped",
+          equipment: "Left Hand",
+          equipment_id: 5,
+        },
+        modifiers: [
+          modifier("item_fastercastrate", [40]),
+          modifier("passive_fire_pierce", [10]),
+          modifier("item_crushingblow", [20]),
+        ],
+      })
+    );
+    const calculation = calculateDamage(character);
+    const right = calculation.weaponOptions.find(
+      (w) =>
+        w.slot === "right" &&
+        w.weaponSet === "primary" &&
+        w.handMode === "one_handed"
+    );
+    const left = calculation.weaponOptions.find(
+      (w) =>
+        w.slot === "left" &&
+        w.weaponSet === "primary" &&
+        w.handMode === "one_handed"
+    );
+    expect(calculation.combat.weapons[right.id].fcr).toBe(80);
+    expect(calculation.combat.weapons[right.id].pierce.fire).toBe(15);
+    expect(calculation.combat.weapons[left.id].pierce.fire).toBe(15);
+    expect(calculation.combat.weapons[right.id].crushingBlow).toBe(10);
+    expect(calculation.combat.weapons[left.id].crushingBlow).toBe(20);
+  });
+
+  it("keeps hard-point combat formulas separate from soft levels and Battle Command", () => {
+    const paladin = createCharacter("Smite", 20);
+    paladin.character.class = { id: 3, name: "Paladin" };
+    paladin.realSkills[0].level = 40;
+    paladin.character.skills.push({ id: 108, name: "Blessed Aim", level: 1 });
+    paladin.realSkills.push({ skill: "Blessed Aim", level: 21, baseLevel: 1 });
+    const combat = calculateDamage(paladin).combat;
+    expect(combat.skills.Smite.levels[40].crushingBlow).toBe(25);
+    const primary = Object.entries(combat.weapons).find(([id]) =>
+      id.startsWith("primary:right:")
+    )[1];
+    expect(primary.targetDefensePercent).toBe(1);
+    const barbarian = createCharacter("Increased Speed", 20);
+    barbarian.character.class = { id: 4, name: "Barbarian" };
+    barbarian.realSkills[0].level = 40;
+    for (const weapon of Object.values(
+      calculateDamage(barbarian).combat.weapons
+    )) {
+      expect(weapon.gearIAS).toBe(40);
+      expect(weapon.skillBonuses.every((bonus) => bonus.gearIAS === 0)).toBe(
+        true
+      );
+    }
+    const amazon = createCharacter("Penetrate", 20);
+    amazon.character.class = { id: 0, name: "Amazon" };
+    amazon.realSkills[0].level = 40;
+    amazon.items = [createBow()];
+    const bow = Object.entries(calculateDamage(amazon).combat.weapons).find(
+      ([id]) => id.startsWith("primary:right:missile:")
+    )[1];
+    expect(bow.mastery[0]).toBe(425);
+    expect(bow.mastery[3]).toBe(455);
+    expect(bow.pierce.physical).toBe(10);
+    expect(bow.skillBonuses[7].pierce.physical).toBe(0);
+  });
+
+  it("recalculates Werewolf's Shape Shifting attack rating across Battle Command tiers", () => {
+    const character = createCharacter("Feral Rage", 20);
+    character.character.skills.push({
+      id: 223,
+      name: "Shape Shifting",
+      level: 20,
+    });
+    character.realSkills.push({
+      skill: "Shape Shifting",
+      level: 20,
+      baseLevel: 20,
+    });
+    expect(
+      calculateDamage(character).combat.werewolfAttackRatingBonuses
+    ).toEqual(Array.from({ length: 8 }, (_, bonus) => bonus * 12));
+  });
+
+  it("keeps summon pierce and bleed on the summon rather than the caster", () => {
+    const character = createCharacter("Summon Dire Wolf", 20);
+    character.character.skills.push({
+      id: 227,
+      name: "Blood Golem",
+      level: 20,
+    });
+    character.realSkills.push({
+      skill: "Blood Golem",
+      level: 20,
+      baseLevel: 20,
+    });
+    const combat = calculateDamage(character).combat;
+    for (const weapon of Object.values(combat.weapons)) {
+      expect(weapon.pierce.physical).toBe(0);
+      expect(weapon.openWoundsDps).toBe(0);
+    }
+    expect(combat.skills["Summon Dire Wolf"].levels[20].pierce.physical).toBe(
+      17
+    );
+  });
+
+  it("does not learn unallocated passives through Battle Command", () => {
+    const character = createCharacter("Basic Attack", 1);
+    character.realSkills.push({
+      skill: "Critical Strike",
+      level: 0,
+      baseLevel: 0,
+    });
+    character.character.skills.push({
+      id: 9,
+      name: "Critical Strike",
+      level: 0,
+    });
+    const calculation = calculateDamage(character);
+    for (const profile of calculation.profiles.filter(
+      (profile) => profile.playerAuraId === "Battle Command"
+    )) {
+      expect(
+        profile.strikeBreakdowns.every((strike) => strike.criticalChance === 0)
+      ).toBe(true);
+    }
+    for (const weapon of Object.values(calculation.combat.weapons))
+      expect(weapon.mastery).toEqual(Array(8).fill(0));
+  });
+
+  it("precomputes every Battle Command all-skills tier without one profile per level", () => {
+    const character = createCharacter("War Cry", 20);
+    character.character.class = { id: 4, name: "Barbarian" };
+    const calculation = calculateDamage(character);
+    const command = calculation.playerAuraOptions.find(
+      (option) => option.id === "Battle Command"
+    );
+    const profiles = calculation.profiles.filter(
+      (profile) =>
+        profile.skillId === "War Cry" &&
+        profile.playerAuraId === "Battle Command" &&
+        profile.playerAuraCarrier === "self" &&
+        profile.weaponId === calculation.weaponOptions[0].id
+    );
+    expect(profiles).toHaveLength(3);
+    for (let level = 1; level <= 60; level++) {
+      const bonus = command.selfLevelBonuses.find(
+        (bonus) => bonus.level === level
+      ).skillLevelBonus;
+      expect(bonus).toBe(1 + Math.floor(Math.min(level, 20) / 10));
+      expect(
+        profiles.some((profile) => profile.skillLevel === 20 + bonus)
+      ).toBe(true);
+    }
   });
 
   it("models capped Critical and Deadly Strike as separate expected damage", () => {
@@ -1267,7 +1971,7 @@ describeWithGameData("damage calculator component model", () => {
         ?.strikeModifiers
     ).toMatchObject({ deadlyStrikeChance: 15 });
     expect(
-      spiritOfBarbs.selfLevelBonuses.find((bonus) => bonus.level === level)
+      spiritOfBarbs.selfLevelBonusesByWeaponSet.primary.find((bonus) => bonus.level === level)
         ?.strikeModifiers
     ).toMatchObject({
       deadlyStrikeChance: 27,
@@ -1528,12 +2232,8 @@ describeWithGameData("damage calculator component model", () => {
       (["fire", "cold", "lightning"] as const).map((element) => [
         element,
         {
-          min: Math.floor(
-            vengeanceBaseByElement[element].min * (1 + percent / 100)
-          ),
-          max: Math.floor(
-            vengeanceBaseByElement[element].max * (1 + percent / 100)
-          ),
+          min: vengeanceBaseByElement[element].min * (1 + percent / 100),
+          max: vengeanceBaseByElement[element].max * (1 + percent / 100),
         },
       ])
     ) as Record<"fire" | "cold" | "lightning", DamageRange>;
@@ -1554,7 +2254,7 @@ describeWithGameData("damage calculator component model", () => {
           withVengeancePercent.cold.max * (1 + coldSkillDamage / 100)
         ),
       },
-      lightning: withVengeancePercent.lightning,
+      lightning: { min: Math.floor(withVengeancePercent.lightning.min), max: Math.floor(withVengeancePercent.lightning.max) },
     };
 
     expect(vengeanceOption).toMatchObject({ damageMode: "weapon" });
@@ -2148,6 +2848,25 @@ describeWithGameData("damage calculator component model", () => {
     });
   });
 
+  it("does not turn resistance-aura buff values into damage pulses", () => {
+    const calculation = calculateDamage(createCharacter("Basic Attack", 1));
+    const profiles = calculation.profiles.filter((p) =>
+      ["Resist Fire", "Resist Cold", "Resist Lightning"].includes(
+        p.playerAuraId
+      )
+    );
+    expect(profiles.length).toBeGreaterThan(0);
+    expect(profiles.every((p) => !p.auraPulseDamageComponents?.length)).toBe(
+      true
+    );
+  });
+  it("provides pulse curves between precomputed aura levels without inflating raw profile counts", () => {
+    const calculation=calculateDamage(createCharacter("Basic Attack",1));
+    expect(calculation.combat.auraPulses.primary["Holy Fire"][13].fire).toEqual({min:8,max:12});
+    expect(calculation.combat.auraPulses.secondary["Holy Fire"][13].fire).toEqual({min:8,max:12});
+    expect(calculation.combat.auraPulses.primary["Resist Fire"]).toBeUndefined();
+  });
+
   it("shows aura pulse damage separately from weapon-hit aura damage", () => {
     const character = createCharacter("Holy Fire", 20);
     character.character.class = { id: 3, name: "Paladin" };
@@ -2696,7 +3415,7 @@ describeWithGameData("damage calculator component model", () => {
     expect(fistProfile!.damageScope).toEqual(
       expect.objectContaining({
         label: "per primary hit plus one bolt",
-        count: 4,
+        count: 50,
         countLabel: "holy bolts",
       })
     );
@@ -2713,7 +3432,7 @@ describeWithGameData("damage calculator component model", () => {
 
     expect(meteorProfile).toBeDefined();
     expect(meteorProfile!.damageScope.label).toBe(
-      "per impact plus ground fire"
+      "per impact"
     );
     expect(meteorProfile!.damageScope.note).toContain("meteorfire");
 
@@ -2727,20 +3446,20 @@ describeWithGameData("damage calculator component model", () => {
 
     expect(moltenBoulderProfile).toBeDefined();
     expect(moltenBoulderProfile!.damageScope.label).toBe(
-      "per impact plus fire path"
+      "per impact"
     );
     expect(moltenBoulderProfile!.damageScope.note).toContain(
       "moltenboulderfirepath"
     );
 
     for (const [skillName, expectedLabel, expectedNote] of [
-      ["Fire Arrow", "per impact plus fire wall", "firearrow firewall"],
+      ["Fire Arrow", "per impact", "firearrow firewall"],
       [
         "Immolation Arrow",
-        "per impact plus fire patches",
+        "per impact",
         "server-reachable fire patch",
       ],
-      ["Armageddon", "per impact plus ground fire", "armageddonfire"],
+      ["Armageddon", "per impact", "armageddonfire"],
       ["Thunder Storm", "per strike plus nova", "thunderstormnova"],
     ] as const) {
       const character = createCharacter(skillName, 20);
@@ -3240,6 +3959,11 @@ describeWithGameData("damage calculator component model", () => {
 
     expect(sequenceOption?.sequenceHits).toHaveLength(2);
     expect(sequenceProfile?.sequenceHits).toHaveLength(2);
+    expect(
+      sequenceProfile?.damageComponents
+        .filter((component) => component.damageType === "physical")
+        .every((component) => component.physicalBonusPercent !== undefined)
+    ).toBe(true);
     expect(sequenceProfile?.damageTotals.combinedDamage).toEqual({
       min:
         rightProfile!.damageTotals.combinedDamage.min +
@@ -3704,7 +4428,7 @@ describeWithGameData("damage calculator component model", () => {
     ).toBe(false);
     expect(magicArrowProfile?.breakdown.flatPhysicalDamage).toEqual({
       min: 12,
-      max: 12,
+      max: 0,
     });
     expect(magicArrowProfile?.damageTotals.combinedDamage.max).toBeGreaterThan(
       0
@@ -3749,7 +4473,7 @@ describeWithGameData("damage calculator component model", () => {
       profiles.every(
         (profile) =>
           profile.damageScope.label ===
-          "per weapon hit plus one fire payload"
+          "per weapon hit"
       )
     ).toBe(true);
   });
@@ -3919,11 +4643,8 @@ describeWithMonStatsData("summon damage modeling", () => {
     const skills = loadGameFile("Skills.txt", "skill");
     const spiritWolfRow = skills.rowsByKey.get("Summon Spirit Wolf")!;
     const calc = getGameFileCell(skills, spiritWolfRow, "passivecalc3");
-    const expectedDamagePercent = getExpectedSkillLinearAliasFromGameFiles(
-      "Summon Grizzly",
-      grizzlyLevel,
-      calc
-    );
+    expect(calc).toBe("(skill('Summon Grizzly'.blvl) > 0) ? (skill('Summon Grizzly'.par1) + (skill('Summon Grizzly'.blvl)-1)*skill('Summon Grizzly'.par2)) : 0");
+    const expectedDamagePercent = 25 + (grizzlyLevel - 1) * 10;
     const expectedBaseDamage = getExpectedSummonPhysicalPayloadFromGameFiles(
       "Summon Spirit Wolf",
       spiritWolfLevel
@@ -4158,7 +4879,7 @@ describeWithMonStatsData("summon damage modeling", () => {
     const calculation = calculateDamage(character);
     const fireGolemProfile = calculation.profiles.find(
       (profile) =>
-        profile.skillId === "FireGolem" && profile.playerAuraId === "none"
+        profile.skillId === "FireGolem::normal" && profile.playerAuraId === "none"
     );
     const hydraProfile = calculation.profiles.find(
       (profile) =>
@@ -4380,7 +5101,7 @@ describeWithMonStatsData("summon damage modeling", () => {
     const calculation = calculateDamage(character);
     const clayProfile = calculation.profiles.find(
       (profile) =>
-        profile.skillId === "Clay Golem" && profile.playerAuraId === "none"
+        profile.skillId === "Clay Golem::normal" && profile.playerAuraId === "none"
     );
     const monsterComponent = clayProfile?.damageComponents.find(
       (component) => component.source === "monster"

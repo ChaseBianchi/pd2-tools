@@ -1,11 +1,14 @@
 import fs from "fs";
 import path from "path";
 import CharacterStatParser from "./character-stats";
+import { combatClasses, combatWeapons, combatElementStats, emptyCombatResistances } from "./combat-data";
+import type { DamageCombatData, CombatWeapon, CombatResistances } from "../types/combat";
 import {
   expandItemStats,
   getExpandedItemElementalDamageRanges,
 } from "./item-stat-expansion";
 import { calculateTotalSkills } from "./skill-calculator";
+import { evaluateIntegerFormula } from "./game-formula";
 import {
   ActiveAuraSummary,
   CharacterResponse,
@@ -45,6 +48,7 @@ type AuraCarrier = "self" | "party";
 type AuraSource = {
   name: string;
   level: number;
+  baseLevel?: number;
   source: AuraSourceKind;
   carrier: AuraCarrier;
 };
@@ -96,7 +100,7 @@ const PD2_GAME_DATA_DIRECTORY = path.resolve(
   "src",
   "game-data",
   "pd2",
-  "season-13"
+  "season-14"
 );
 
 const DEFAULT_DAMAGE_SCOPE: DamageProfile["damageScope"] = {
@@ -177,10 +181,10 @@ const SKILL_DAMAGE_SCOPE_DEFINITIONS: Record<string, DamageScopeDefinition> = {
     note: "Shock Wave totals are per missile. Skills.txt calc1 exposes missile count; overlap, target count, and cast rate are not multiplied into totals.",
   },
   [normalizeSkillName("Fire Claws").toLowerCase()]: {
-    label: "per weapon hit plus one fire payload",
+    label: "per weapon hit",
     countColumn: "calc2",
     countLabel: "fire missiles",
-    note: "Fire Claws totals include the melee weapon hit plus one modeled fire payload. Skills.txt calc2 exposes fire missile count; overlap, target count, hit chance, and attack rate are not multiplied into totals.",
+    note: "Fire Claws separates the melee hit from ground-fire DPS. Ground damage uses SkillDesc's 5/2 display multiplier for one sustained payload; missile count, overlap and attack rate are not multiplied into that payload.",
   },
   [normalizeSkillName("Zeal").toLowerCase()]: {
     label: "per weapon hit",
@@ -251,12 +255,12 @@ const SKILL_DAMAGE_SCOPE_DEFINITIONS: Record<string, DamageScopeDefinition> = {
     note: "Vengeance totals are per weapon hit with modeled elemental conversion. Skills.txt calc4 exposes chain percent rather than a deterministic chain count; chained targets, hit chance, and attack rate are not multiplied into totals.",
   },
   [normalizeSkillName("Fire Arrow").toLowerCase()]: {
-    label: "per impact plus fire wall",
-    note: "Fire Arrow totals include the weapon/fire impact plus one modeled firearrow firewall payload. Ground-fire duration, repeated ticks, target count, hit chance, and attack rate are not multiplied into totals.",
+    label: "per impact",
+    note: "Fire Arrow totals include the impact only. The firearrow firewall ground-fire rate is shown separately; exposure duration, overlap, target count, and attack/cast rate are not multiplied into the hit total.",
   },
   [normalizeSkillName("Immolation Arrow").toLowerCase()]: {
-    label: "per impact plus fire patches",
-    note: "Immolation Arrow totals include the weapon/fire impact plus one modeled instance of each server-reachable fire patch payload. Patch duration, repeated ticks, overlap, target count, hit chance, and attack rate are not multiplied into totals.",
+    label: "per impact",
+    note: "Immolation Arrow totals include the impact only. The server-reachable fire patch ground-fire rate is shown separately; exposure duration, overlap, target count, and attack/cast rate are not multiplied into the hit total.",
   },
   [normalizeSkillName("Charged Bolt").toLowerCase()]: {
     label: "per bolt",
@@ -305,12 +309,12 @@ const SKILL_DAMAGE_SCOPE_DEFINITIONS: Record<string, DamageScopeDefinition> = {
     note: "Fist of the Heavens totals include the primary lightning hit plus one modeled holy bolt payload. Skills.txt calc4 exposes the holy bolt count, but target selection and released bolt overlap are not multiplied into totals.",
   },
   [normalizeSkillName("Meteor").toLowerCase()]: {
-    label: "per impact plus ground fire",
-    note: "Meteor totals include the impact physical/fire payload plus one modeled meteorfire ground-fire payload. Impact radius, target count, burn duration, and repeated ground-fire ticks are not multiplied into totals.",
+    label: "per impact",
+    note: "Meteor totals include the impact only. The meteorfire ground-fire rate is shown separately; exposure duration, overlap, target count, and attack/cast rate are not multiplied into the hit total.",
   },
   [normalizeSkillName("Molten Boulder").toLowerCase()]: {
-    label: "per impact plus fire path",
-    note: "Molten Boulder totals include the direct physical/fire impact payload plus one modeled moltenboulderfirepath payload. Boulder travel, repeated contacts, fire path duration, and target count are not multiplied into totals.",
+    label: "per impact",
+    note: "Molten Boulder totals include the impact only. The moltenboulderfirepath ground-fire rate is shown separately; exposure duration, overlap, target count, and attack/cast rate are not multiplied into the hit total.",
   },
   [normalizeSkillName("Volcano").toLowerCase()]: {
     label: "per impact",
@@ -353,8 +357,8 @@ const SKILL_DAMAGE_SCOPE_DEFINITIONS: Record<string, DamageScopeDefinition> = {
     note: "Hurricane totals are per modeled projectile hit from Skills.txt damage fields. Aura duration, pulse frequency, target count, and repeated hits are not multiplied into totals.",
   },
   [normalizeSkillName("Armageddon").toLowerCase()]: {
-    label: "per impact plus ground fire",
-    note: "Armageddon totals include the physical/fire impact plus one modeled armageddonfire ground-fire payload. Storm duration, rock count, ground-fire duration, target count, and repeated impacts are not multiplied into totals.",
+    label: "per impact",
+    note: "Armageddon totals include the impact only. The armageddonfire ground-fire rate is shown separately; exposure duration, overlap, target count, and attack/cast rate are not multiplied into the hit total.",
   },
   [normalizeSkillName("Blade Sentinel").toLowerCase()]: {
     label: "per projectile hit",
@@ -497,6 +501,7 @@ type DirectSkillDamage = {
     damage: DamageRange;
     source: "skill" | "missile";
     timing: "instant" | "over_time";
+    damageEventsPerUnit?: number;
     sourceRefs: DamageSourceReference[];
     notes?: string[];
   }>;
@@ -574,7 +579,8 @@ type WeaponSetContext = {
 type SummonVariantDefinition = {
   id: string;
   label: string;
-  componentLabels: string[];
+  componentLabels?: string[];
+  difficultySuffix?: "" | "(N)" | "(H)";
   includeMonsterAttack?: boolean;
   includeSummonedSkills?: boolean;
 };
@@ -674,7 +680,7 @@ function loadPd2GameData(): GameData {
 
   if (missingRequiredFiles.length > 0) {
     throw new Error(
-      `Damage calculator requires committed PD2 game tables under api/src/game-data/pd2/season-13. Missing: ${missingRequiredFiles.join(", ")}.`
+      `Damage calculator requires committed PD2 game tables under api/src/game-data/pd2/season-14. Missing: ${missingRequiredFiles.join(", ")}.`
     );
   }
 
@@ -697,10 +703,17 @@ function loadPd2GameData(): GameData {
 
 const pd2GameData = loadPd2GameData();
 
-const GAME_DAMAGE_LEVEL_THRESHOLDS = [8, 16, 22, 28, 60] as const;
+const GAME_DAMAGE_LEVEL_THRESHOLDS = [8, 16, 22, 28, Infinity] as const;
+const DEFAULT_MAX_SELECTABLE_SKILL_LEVEL = 60;
 
 const FRAME_RATE_DAMAGE_MULTIPLIER = 75;
-const FISTS_OF_FIRE_METEOR_PHYSICAL_MULTIPLIER = 2;
+// These server payloads are persistent ground fire. A name containing "fire"
+// alone says nothing about whether a missile deals a hit or periodic damage.
+const GROUND_FIRE_MISSILES = new Set([
+  "firearrow firewall", "immolationfire", "immolationarrow firewall",
+  "immolationarrow fire", "meteorfire", "moltenboulderfirepath",
+  "armageddonfire", "fofmeteorfire", "clawfirestorm",
+]);
 const INFERNO_SENTRY_STREAM_MULTIPLIER = 25 / 3;
 const FIRE_STREAM_DAMAGE_MULTIPLIER = 25;
 const HALF_RATE_DAMAGE_MULTIPLIER = 1 / 2;
@@ -856,6 +869,7 @@ const MISSILE_CHILD_COLUMNS = [
 ] as const;
 
 const SKILL_NAME_ALIASES: Record<string, string> = {
+  "Burst of Speed": "Quickness",
   "Amplify Damage": "AmpDmg",
   "Blood Golem": "BloodGolem",
   "Curse Mastery": "CurMas",
@@ -875,6 +889,7 @@ const SKILL_NAME_ALIASES: Record<string, string> = {
   "Blessed Shield": "Holy Shield",
   "Raise Skeleton": "Raise Skeleton Warrior",
   "Phoenix Strike": "Royal Strike",
+  "Poison Strike": "Poison Dagger",
   "Poison Creeper": "Plague Poppy",
   Lycanthropy: "Shape Shifting",
   "Carrion Vine": "Cycle of Life",
@@ -1248,6 +1263,28 @@ function getGamePassiveStatValue(
   return total;
 }
 
+function getGlobalPlayerPassiveStatValue(
+  statName: string,
+  skillMap: Map<string, SkillEntry>,
+  weaponSelection?: WeaponSelection
+): number {
+  let total = 0;
+
+  skillMap.forEach((entry, skillName) => {
+    const skillRow = getGameRow("Skills", skillName);
+    if (entry.level <= 0 || !skillRow || getGameRowString("Skills", skillRow, "summon")) {
+      return;
+    }
+    if (statName === "passive_phys_pierce" &&
+        (!weaponSelection || !passiveStrikeSkillAppliesToWeapon(skillName, skillRow, weaponSelection))) {
+      return;
+    }
+    total += getGameSkillPassiveStatValue(skillName, [statName], skillMap) || 0;
+  });
+
+  return total;
+}
+
 const SUPPORTED_AURA_DAMAGE_STATS = new Set([
   "damagepercent",
   "firemindam",
@@ -1312,7 +1349,21 @@ const SUMMON_VARIANT_DEFINITIONS: Record<string, SummonVariantDefinition[]> = {
 function getSummonVariantDefinitions(
   skillName: string
 ): SummonVariantDefinition[] {
-  return SUMMON_VARIANT_DEFINITIONS[skillName] || [];
+  const variants = SUMMON_VARIANT_DEFINITIONS[skillName];
+  if (variants) return variants;
+  const row = getGameRow("Skills", skillName);
+  const monster = row && getSummonMonsterRow(row);
+  if (!monster || !["A1MinD", "A1MaxD", "A2MinD", "A2MaxD"].some((column) =>
+    ["(N)", "(H)"].some((suffix) => getGameRowNumber("MonStats", monster, column + suffix) !==
+      getGameRowNumber("MonStats", monster, column))
+  )) return [];
+  return [
+    { id: "normal", label: "Normal", difficultySuffix: "" },
+    { id: "nightmare", label: "Nightmare", difficultySuffix: "(N)" },
+    { id: "hell", label: "Hell", difficultySuffix: "(H)" },
+  ].map((variant) => ({
+    ...variant, includeMonsterAttack: true, includeSummonedSkills: true,
+  })) as SummonVariantDefinition[];
 }
 
 function getSummonVariantDefinition(
@@ -1780,10 +1831,7 @@ function getMaxModeledSkillLevel(skillName: string): number {
   const maxSkillLevel = skillRow
     ? getGameRowNumber("Skills", skillRow, "maxlvl")
     : 0;
-  const maxScalingLevel =
-    GAME_DAMAGE_LEVEL_THRESHOLDS[GAME_DAMAGE_LEVEL_THRESHOLDS.length - 1];
-
-  return Math.max(maxSkillLevel, maxScalingLevel);
+  return Math.max(maxSkillLevel, DEFAULT_MAX_SELECTABLE_SKILL_LEVEL);
 }
 
 function getManualAuraLevelOptions(definition: PlayerAuraDefinition): number[] {
@@ -1907,17 +1955,16 @@ function getGameDotMultiplier(
     return getGameRowNumber(tableName, row, "ELen") || 1;
   }
 
-  if (
-    tableName === "Missiles" &&
-    rowKey[0] === rowKey[0]?.toLowerCase() &&
-    rowKey.includes("fire") &&
-    rowKey !== "fistsoffirenova"
-  ) {
-    return FRAME_RATE_DAMAGE_MULTIPLIER;
+  // Beta SkillDesc fire claws desccalca/b2 displays missile damage * 5 / 2.
+  if (tableName === "Missiles" && rowKey === "clawfirestorm") {
+    return 5 / 2;
   }
 
-  if (rowKey === "fofmeteor") {
-    return FISTS_OF_FIRE_METEOR_PHYSICAL_MULTIPLIER;
+  if (
+    tableName === "Missiles" &&
+    GROUND_FIRE_MISSILES.has(rowKey)
+  ) {
+    return FRAME_RATE_DAMAGE_MULTIPLIER;
   }
 
   if (tableName === "Skills") {
@@ -2040,7 +2087,7 @@ function evaluateGameCalcExpression(
   );
 
   const normalized = expression
-    .replace(/^"|"$/g, "")
+    .replace(/"/g, "")
     .replace(/\bmin\(/g, "Math.min(")
     .replace(/\bmax\(/g, "Math.max(")
     .replace(/skill\('([^']+)'\.blvl\)/g, (_, skillName: string) =>
@@ -2117,7 +2164,11 @@ function evaluateGameCalcExpression(
       )
     )
     .replace(/\blvl\b/g, String(level))
-    .replace(/\bblvl\b/g, String(level))
+    .replace(/\bblvl\b/g, () =>
+      String(getGameSkillEntry(
+        skillMap, getGameRowString("Skills", skillRow, "skill")
+      ).baseLevel)
+    )
     .replace(/stat\('([^']+)'\.accr\)/g, (_, statName: string) =>
       String(getGamePassiveStatValue(statName, skillMap, visitingPassiveStats))
     )
@@ -2125,12 +2176,8 @@ function evaluateGameCalcExpression(
       String(getGameSkillParam(skillRow, Number(paramNumber)))
     );
 
-  if (!/^[\d+\-*/().,\sMathminax<>!=?:]+$/.test(normalized)) {
-    return 0;
-  }
-
   try {
-    return Math.floor(Function(`"use strict"; return (${normalized});`)());
+    return evaluateIntegerFormula(normalized);
   } catch {
     return 0;
   }
@@ -2168,9 +2215,18 @@ function getGameElementalBonusPercent(
 function scaleDamageRangeInStages(
   range: DamageRange,
   firstPercent: number,
-  secondPercent: number
+  secondPercent: number,
+  damageMultiplier = 1
 ): DamageRange {
-  return scaleDamageRange(scaleDamageRange(range, firstPercent), secondPercent);
+  // Combat damage is stored in 1/256 units. Truncating to whole hit points
+  // between synergy and mastery loses real damage, especially for streams.
+  const scale = (value: number) => {
+    let fixed = Math.trunc(value * 256);
+    fixed += Math.trunc(fixed * firstPercent / 100);
+    fixed += Math.trunc(fixed * secondPercent / 100);
+    return Math.floor(fixed * damageMultiplier / 256);
+  };
+  return { min: scale(range.min), max: scale(range.max) };
 }
 
 function createGameComponent(
@@ -2182,7 +2238,8 @@ function createGameComponent(
   source: "skill" | "missile",
   sourceRefs: DamageSourceReference[],
   timing: "instant" | "over_time" = "instant",
-  notes: string[] = []
+  notes: string[] = [],
+  damageMultiplier = 1
 ): DirectSkillDamage["components"][number] {
   return {
     label,
@@ -2190,22 +2247,14 @@ function createGameComponent(
     damage: scaleDamageRangeInStages(
       baseRange,
       synergyPercent,
-      elementalBonusPercent
+      elementalBonusPercent,
+      damageMultiplier
     ),
     source,
     timing,
+    damageEventsPerUnit: element !== "poison" && timing === "over_time" && damageMultiplier > 1 ? damageMultiplier : undefined,
     sourceRefs,
     notes,
-  };
-}
-
-function applyGameDotMultiplier(
-  range: DamageRange,
-  multiplier: number
-): DamageRange {
-  return {
-    min: range.min * multiplier,
-    max: range.max * multiplier,
   };
 }
 
@@ -2348,7 +2397,8 @@ function getGameSkillComponents(
   skillName: string,
   level: number,
   skillMap: Map<string, SkillEntry>,
-  realStats?: CharacterData["realStats"]
+  realStats?: CharacterData["realStats"],
+  missileLevel = level
 ): DirectSkillDamage["components"] {
   const skillRow = getGameRow("Skills", skillName);
   if (!skillRow) {
@@ -2378,11 +2428,12 @@ function getGameSkillComponents(
       createGameComponent(
         "Physical",
         "physical",
-        applyGameDotMultiplier(physicalRange, multiplier),
+        physicalRange,
         evaluateGameCalcExpression(
           getGameRowString("Skills", skillRow, "DmgSymPerCalc"),
           skillRow,
-          skillMap
+          skillMap,
+          level
         ),
         0,
         "skill",
@@ -2399,7 +2450,10 @@ function getGameSkillComponents(
               "HitShift",
             ],
           },
-        ]
+        ],
+        "instant",
+        [],
+        multiplier
       )
     );
   }
@@ -2428,11 +2482,12 @@ function getGameSkillComponents(
       createGameComponent(
         element[0].toUpperCase() + element.slice(1),
         element,
-        applyGameDotMultiplier(elementalRange, multiplier),
+        elementalRange,
         evaluateGameCalcExpression(
           getGameRowString("Skills", skillRow, "EDmgSymPerCalc"),
           skillRow,
-          skillMap
+          skillMap,
+          level
         ),
         getGameElementalBonusPercent(element, skillMap, realStats, skillName),
         "skill",
@@ -2457,7 +2512,9 @@ function getGameSkillComponents(
           eType,
           multiplier,
           isGameWeaponAttackSkill(skillName)
-        )
+        ),
+        [],
+        multiplier
       )
     );
   }
@@ -2513,7 +2570,7 @@ function getGameSkillComponents(
         skillName,
         formatGameMissileLabel(missileName),
         missileName,
-        level,
+        missileLevel,
         skillRow,
         skillMap,
         realStats
@@ -2579,11 +2636,12 @@ function getGameMissileComponents(
       createGameComponent(
         label.includes("Physical") ? label : "Physical",
         "physical",
-        applyGameDotMultiplier(physicalRange, multiplier),
+        physicalRange,
         evaluateGameCalcExpression(
           getGameRowString("Missiles", missileRow, "DmgSymPerCalc"),
           sourceSkillRow,
-          skillMap
+          skillMap,
+          level
         ),
         0,
         "missile",
@@ -2602,7 +2660,10 @@ function getGameMissileComponents(
               "HitShift",
             ],
           },
-        ]
+        ],
+        "instant",
+        [],
+        multiplier
       )
     );
   }
@@ -2631,11 +2692,12 @@ function getGameMissileComponents(
       createGameComponent(
         label,
         element,
-        applyGameDotMultiplier(elementalRange, multiplier),
+        elementalRange,
         evaluateGameCalcExpression(
           getGameRowString("Missiles", missileRow, "EDmgSymPerCalc"),
           sourceSkillRow,
-          skillMap
+          skillMap,
+          level
         ),
         getGameElementalBonusPercent(
           element,
@@ -2662,7 +2724,9 @@ function getGameMissileComponents(
             ],
           },
         ],
-        getGameComponentTiming(eType, multiplier)
+        getGameComponentTiming(eType, multiplier),
+        [],
+        multiplier
       )
     );
   }
@@ -2741,7 +2805,9 @@ function getSkillMap(characterData: CharacterData): Map<string, SkillEntry> {
     characterData.realSkills.forEach((skill) => {
       skillMap.set(normalizeSkillName(skill.skill), {
         level: skill.level,
-        baseLevel: skill.baseLevel ?? skill.level,
+        baseLevel: skill.baseLevel ?? characterData.character.skills.find(
+          (allocated) => normalizeSkillName(allocated.name) === normalizeSkillName(skill.skill)
+        )?.level ?? 0,
       });
     });
   }
@@ -2826,7 +2892,7 @@ function isActiveInventoryCharm(item: IItem): boolean {
 }
 
 function isEquippedItem(item: IItem): boolean {
-  return item.location?.zone === "Equipped";
+  return item.location?.zone === "Equipped" || Boolean(!item.location?.zone && item.location?.equipment);
 }
 
 function getPlayerItemsForWeaponSet(
@@ -3498,13 +3564,12 @@ function getPayloadStatBonusPercent(
   strength: number,
   dexterity: number
 ): number | undefined {
-  const strengthBonus = item.base?.stat_bonus?.strength || 0;
-  const dexterityBonus = item.base?.stat_bonus?.dexterity || 0;
-  if (strengthBonus <= 0 && dexterityBonus <= 0) {
+  const bonuses = item.base?.stat_bonus;
+  if (bonuses?.strength === undefined && bonuses?.dexterity === undefined) {
     return undefined;
   }
-
-  return strength * (strengthBonus / 100) + dexterity * (dexterityBonus / 100);
+  return Math.trunc(strength * (bonuses.strength || 0) / 100) +
+    Math.trunc(dexterity * (bonuses.dexterity || 0) / 100);
 }
 
 function getStatBonusPercent(
@@ -3513,14 +3578,17 @@ function getStatBonusPercent(
   strength: number,
   dexterity: number
 ): number {
+  const payloadBonus = getPayloadStatBonusPercent(
+    weaponSelection.item, strength, dexterity
+  );
+  if (payloadBonus !== undefined) {
+    return payloadBonus;
+  }
   if (
     weaponSelection.option.handMode === "kick" ||
     weaponSelection.option.handMode === "smite"
   ) {
-    return (
-      getPayloadStatBonusPercent(weaponSelection.item, strength, dexterity) ??
-      strength
-    );
+    return strength;
   }
 
   if (isBowOrCrossbow(weaponSelection.item)) {
@@ -3528,25 +3596,25 @@ function getStatBonusPercent(
   }
 
   if (isClawWeapon(weaponSelection.item)) {
-    return strength * 0.75 + dexterity * 0.75;
+    return Math.trunc(strength * 0.75) + Math.trunc(dexterity * 0.75);
   }
 
   if (
     weaponSelection.option.handMode === "missile" &&
     !isBowOrCrossbow(weaponSelection.item)
   ) {
-    return strength * 0.75 + dexterity * 0.75;
+    return Math.trunc(strength * 0.75) + Math.trunc(dexterity * 0.75);
   }
 
   if (
     characterClass.toLowerCase() === "amazon" &&
     isJavelinOrSpear(weaponSelection.item)
   ) {
-    return strength * 0.8 + dexterity * 0.5;
+    return Math.trunc(strength * 0.8) + Math.trunc(dexterity * 0.5);
   }
 
   if (isHammerWeapon(weaponSelection.item)) {
-    return strength * 1.1;
+    return Math.trunc(strength * 110 / 100);
   }
 
   return strength;
@@ -3630,6 +3698,7 @@ function collectCallToArmsBattleCommand(
           : itemGrantedLevel,
       source: "player_item",
       carrier: "self",
+      baseLevel: existingBattleCommand.baseLevel,
     },
   ];
 }
@@ -3640,7 +3709,7 @@ function collectAlwaysActiveAuras(
 ): AuraSource[] {
   const auras: AuraSource[] = [];
 
-  playerItems.forEach((item) => {
+  playerItems.filter(isEquippedItem).forEach((item) => {
     item.properties.forEach((property) => {
       if (!property) {
         return;
@@ -3685,6 +3754,7 @@ function summarizeAuraSource(source: AuraSource): ActiveAuraSummary {
   return {
     name: source.name,
     level: source.level,
+    baseLevel: source.baseLevel,
     source: source.source,
     carrier: source.carrier,
   };
@@ -3764,6 +3834,7 @@ function collectPlayerAuraOptions(
   ];
 
   const auraLevels = new Map<string, number>();
+  const auraBaseLevels = new Map<string, number>();
   const allocatedBuffIds = new Set<string>();
 
   Object.values(contexts).forEach((context) => {
@@ -3778,6 +3849,7 @@ function collectPlayerAuraOptions(
           auraId,
           Math.max(auraLevels.get(auraId) || 0, entry.level)
         );
+        auraBaseLevels.set(auraId, entry.baseLevel);
         if (
           definition &&
           entry.baseLevel > 0 &&
@@ -3786,25 +3858,58 @@ function collectPlayerAuraOptions(
           allocatedBuffIds.add(auraId);
         }
       });
+    context.alwaysActiveAuras.filter((aura) => aura.name === "Battle Command")
+      .forEach((aura) => {
+        auraLevels.set(aura.name, Math.max(auraLevels.get(aura.name) || 0, aura.level));
+        auraBaseLevels.set(aura.name, aura.baseLevel ?? 0);
+      });
   });
 
   PLAYER_AURA_DEFINITIONS.forEach((definition) => {
     const ownedLevel = auraLevels.get(definition.id) || 0;
-    const levelOptions = getManualAuraLevelOptions(definition);
+    const levelOptions = Array.from({ length: Math.max(
+      getManualAuraLevelOptions(definition).length, ownedLevel
+    ) }, (_, index) => index + 1);
     const selfLevelBonuses = levelOptions.map((level) =>
-      getManualAuraLevelBonus(definition.id, level, "self")
+      getManualAuraLevelBonus(definition.id, level, "self", auraBaseLevels.get(definition.id))
     );
+    const selfLevelBonusesByWeaponSet = ownedLevel > 0 ? {
+      primary: levelOptions.map((level) => getManualAuraLevelBonus(
+        definition.id, level, "self", getSkillEntry(contexts.primary.skillMap, definition.id).baseLevel, contexts.primary
+      )),
+      secondary: levelOptions.map((level) => getManualAuraLevelBonus(
+        definition.id, level, "self", getSkillEntry(contexts.secondary.skillMap, definition.id).baseLevel, contexts.secondary
+      )),
+    } : undefined;
     const partyLevelBonuses = levelOptions.map((level) =>
       getManualAuraLevelBonus(definition.id, level, "party")
     );
+    const automaticLevel = Math.max(
+      0,
+      ...Object.values(contexts).flatMap((context) =>
+        context.alwaysActiveAuras
+          .filter((aura) => aura.name === definition.name)
+          .map((aura) => aura.level)
+      )
+    );
+    const summonLevelBonusesByWeaponSet = ownedLevel > 0 ? {
+      primary: levelOptions.map((level) => getManualAuraLevelBonus(
+        definition.id, level, "party", getSkillEntry(contexts.primary.skillMap, definition.id).baseLevel, contexts.primary
+      )),
+      secondary: levelOptions.map((level) => getManualAuraLevelBonus(
+        definition.id, level, "party", getSkillEntry(contexts.secondary.skillMap, definition.id).baseLevel, contexts.secondary
+      )),
+    } : undefined;
     options.push({
       id: definition.id,
       name: definition.name,
-      level: ownedLevel || 1,
+      level: Math.max(ownedLevel, automaticLevel) || 1,
       defaultActive: ownedLevel > 0 && allocatedBuffIds.has(definition.id),
       levelOptions,
       levelBonuses: selfLevelBonuses,
       selfLevelBonuses,
+      selfLevelBonusesByWeaponSet,
+      summonLevelBonusesByWeaponSet,
       partyLevelBonuses,
       source: ownedLevel > 0 ? "character_skill" : "manual",
     });
@@ -3816,14 +3921,25 @@ function collectPlayerAuraOptions(
 function collectPlayerAuraSelections(
   playerAuraOptions: DamageAuraOption[]
 ): AuraSelection[] {
-  return playerAuraOptions.flatMap((option) =>
-    option.id === "none"
-      ? [{ option, carrier: "self" as const }]
-      : [
-          { option, carrier: "self" as const },
-          { option, carrier: "party" as const },
-        ]
-  );
+  return playerAuraOptions.flatMap((option): AuraSelection[] => {
+    if (option.id === "none") {
+      return [{ option, carrier: "self" }];
+    }
+    return (["self", "party"] as const).flatMap((carrier) => {
+      const bonuses = carrier === "self" ? option.selfLevelBonuses : option.partyLevelBonuses;
+      const levels = new Set([option.level]);
+      const seenSkillBonuses = new Set<number>();
+      // Only +skills needs another server calculation. Other aura deltas can
+      // be applied to the base damage on the client, including between these levels.
+      bonuses.forEach((bonus) => {
+        if (bonus.skillLevelBonus > 0 && !seenSkillBonuses.has(bonus.skillLevelBonus)) {
+          seenSkillBonuses.add(bonus.skillLevelBonus);
+          levels.add(bonus.level);
+        }
+      });
+      return [...levels].map((level) => ({ option: { ...option, level }, carrier }));
+    });
+  });
 }
 
 function isSelectableAttackSkill(skillName: string): boolean {
@@ -3837,6 +3953,7 @@ function isSelectableSpellSkill(skillName: string): boolean {
     ) || skillName;
   if (
     resolvedSkillName === "Holy Shield" ||
+    resolvedSkillName === "Holy Sword" ||
     isPlayerAuraSkill(resolvedSkillName) ||
     isGameSummonSkill(resolvedSkillName) ||
     isGameSelfOrPartyBuffSkill(resolvedSkillName)
@@ -4239,6 +4356,7 @@ function createDamageComponent(component: {
   timing?: DamageComponent["timing"];
   damage: DamageRange;
   baseDamage?: DamageRange;
+  damageEventsPerUnit?: number;
   poisonDamage?: PoisonDamage;
   includedInTotal?: boolean;
   sourceRefs?: DamageSourceReference[];
@@ -4251,6 +4369,7 @@ function createDamageComponent(component: {
     damageType: component.damageType,
     timing: component.timing || "instant",
     damage: normalizeDamageRange(component.damage),
+    damageEventsPerUnit: component.damageEventsPerUnit,
     baseDamage: component.baseDamage
       ? normalizeDamageRange(component.baseDamage)
       : undefined,
@@ -4263,15 +4382,17 @@ function createDamageComponent(component: {
 
 function scalePhysicalDamageComponent(
   component: DamageComponent,
-  multiplier: number
+  bonusPercent: number
 ): DamageComponent {
+  const baseDamage = component.baseDamage || component.damage;
   return {
     ...component,
-    baseDamage: component.baseDamage || component.damage,
-    damage: floorScaleDamageRange(
-      component.baseDamage || component.damage,
-      multiplier
-    ),
+    baseDamage,
+    physicalBonusPercent: bonusPercent,
+    damage: normalizeDamageRange({
+      min: Math.floor(baseDamage.min * (100 + bonusPercent) / 100),
+      max: Math.floor(baseDamage.max * (100 + bonusPercent) / 100),
+    }),
   };
 }
 
@@ -4507,6 +4628,9 @@ function directSkillDamageToComponents(
   const poisonDuration = getGamePoisonDurationSeconds(skillName) || 0;
   return directDamage.components
     .map((component, index) => {
+      const isSeparateGroundFire = component.sourceRefs.some((ref) =>
+        ref.table === "Missiles.txt" && GROUND_FIRE_MISSILES.has(ref.row || "")
+      );
       const damageComponent = createDamageComponent({
         id: `${component.source}:${skillName}:${index}:${component.element}:${component.label}`,
         label:
@@ -4517,6 +4641,8 @@ function directSkillDamageToComponents(
         damageType: component.element,
         timing: component.timing,
         damage: component.damage,
+        damageEventsPerUnit: component.damageEventsPerUnit,
+        includedInTotal: !isSeparateGroundFire,
         poisonDamage:
           component.element === "poison"
             ? {
@@ -4525,7 +4651,9 @@ function directSkillDamageToComponents(
               }
             : undefined,
         sourceRefs: component.sourceRefs,
-        notes: component.notes,
+        notes: isSeparateGroundFire
+          ? [...(component.notes || []), "Ground-fire damage per second is shown separately and excluded from the hit total; target exposure and overlap are not known."]
+          : component.notes,
       });
       return damageComponent;
     })
@@ -4609,6 +4737,7 @@ function directSummonDamageToComponents(
         damageType: component.element,
         timing: component.timing,
         damage: component.damage,
+        damageEventsPerUnit: component.damageEventsPerUnit,
         baseDamage:
           component.element === "physical" ? component.damage : undefined,
         poisonDamage:
@@ -4635,9 +4764,10 @@ type MonsterAttackMode = keyof typeof MONSTER_ATTACK_MODE_COLUMNS;
 
 function getMonsterAttackRange(
   monsterRow: string[],
-  mode: MonsterAttackMode
+  mode: MonsterAttackMode,
+  difficultySuffix = ""
 ): DamageRange | undefined {
-  const [minColumn, maxColumn] = MONSTER_ATTACK_MODE_COLUMNS[mode];
+  const [minColumn, maxColumn] = MONSTER_ATTACK_MODE_COLUMNS[mode].map((column) => column + difficultySuffix);
   const minValue = getGameRowString("MonStats", monsterRow, minColumn);
   const maxValue = getGameRowString("MonStats", monsterRow, maxColumn);
   if (!minValue && !maxValue) {
@@ -4721,7 +4851,8 @@ function getSummonMonsterAttackComponent(
   skillRow: string[],
   monsterRow: string[],
   summonedSkillNames: string[],
-  hasDirectPhysicalDamage: boolean
+  hasDirectPhysicalDamage: boolean,
+  difficultySuffix = ""
 ): DamageComponent | undefined {
   if (hasDirectPhysicalDamage) {
     return undefined;
@@ -4732,13 +4863,13 @@ function getSummonMonsterAttackComponent(
     return undefined;
   }
 
-  const range = getMonsterAttackRange(monsterRow, mode);
+  const range = getMonsterAttackRange(monsterRow, mode, difficultySuffix);
   if (!isNonZeroDamageRange(range)) {
     return undefined;
   }
 
   const monsterId = getGameRowString("MonStats", monsterRow, "Id");
-  const [minColumn, maxColumn] = MONSTER_ATTACK_MODE_COLUMNS[mode];
+  const [minColumn, maxColumn] = MONSTER_ATTACK_MODE_COLUMNS[mode].map((column) => column + difficultySuffix);
   return createDamageComponent({
     id: `monster:${skillName}:${monsterId}:${mode}`,
     label: `Summon ${mode} attack`,
@@ -4776,7 +4907,7 @@ function getSummonedSkillLevel(
     ownerLevel
   );
 
-  return Math.max(1, calculated || ownerLevel);
+  return Math.max(1, calc ? calculated : ownerLevel);
 }
 
 function getSummonedSkillComponents(
@@ -4915,18 +5046,20 @@ function getSummonDamageComponents(
   }
 
   const variantDefinition = getSummonVariantDefinition(skillName, variantId);
-  const directDamage = getGameDirectSkillDamage(
-    skillName,
-    level,
-    skillMap,
-    realStats
-  );
+  // Mage variants share NecromageMissile's assigned level, not the level of
+  // Raise Skeletal Mage. Keep the owner's row/map for inherited mastery.
+  const missileLevel = getGameRowString("Skills", skillRow, "sumskill1") === "NecromageMissile"
+    ? getSummonedSkillLevel(skillRow, skillMap, level, 1)
+    : level;
+  const directDamage = summarizeGameComponents(getGameSkillComponents(
+    skillName, level, skillMap, realStats, missileLevel
+  ), skillName);
   const variantDirectDamage =
-    directDamage && variantDefinition
+    directDamage && variantDefinition?.componentLabels
       ? {
           ...directDamage,
           components: directDamage.components.filter((component) =>
-            variantDefinition.componentLabels.includes(component.label)
+            variantDefinition.componentLabels!.includes(component.label)
           ),
         }
       : directDamage;
@@ -4935,16 +5068,16 @@ function getSummonDamageComponents(
         skillName,
         skillName,
         variantDirectDamage,
-        variantDefinition
+        variantDefinition?.componentLabels
           ? `${variantDefinition.label} payload`
           : "Summon payload",
-        variantDefinition
+        variantDefinition?.componentLabels
           ? [
               {
                 table: "Skills.txt",
                 row: getGameRowString("Skills", skillRow, "skill") || skillName,
-                columns: ["skilldesc", "summon", "pettype"],
-                note: "Summon variant payload selected from SkillDesc.txt missile references instead of summing all mage variants.",
+                columns: ["skilldesc", "summon", "pettype", "sumskill1", "sumsk1calc"],
+                note: `Summon variant uses the assigned missile skill level (${missileLevel}); the four mage variants are separate attacks.`,
               },
             ]
           : []
@@ -4981,7 +5114,8 @@ function getSummonDamageComponents(
           summonedSkillNames,
           directComponents.some(
             (component) => component.damageType === "physical"
-          )
+          ),
+          variantDefinition?.difficultySuffix
         )
       : undefined;
 
@@ -5020,77 +5154,6 @@ function getSummonDamagePercent(
           skillRow,
           getGameStatCalcColumn(prefix, index)
         ),
-        skillRow,
-        skillMap,
-        level
-      );
-    }
-  });
-
-  return total;
-}
-
-function componentReferencesSkillDamageSynergy(
-  component: DamageComponent,
-  skillName: string
-): boolean {
-  const normalizedSkillName = normalizeSkillName(skillName).toLowerCase();
-  return component.sourceRefs.some((ref) => {
-    if (
-      ref.table !== "Skills.txt" ||
-      normalizeSkillName(ref.row || "").toLowerCase() !== normalizedSkillName
-    ) {
-      return false;
-    }
-
-    return ref.columns.some((column) => column === "DmgSymPerCalc");
-  });
-}
-
-function getDuplicateDirectSummonDamagePercent(
-  component: DamageComponent,
-  skillName: string,
-  skillRow: string[] | undefined,
-  level: number,
-  skillMap: Map<string, SkillEntry>
-): number {
-  if (
-    component.damageType !== "physical" ||
-    !skillRow ||
-    !componentReferencesSkillDamageSynergy(component, skillName)
-  ) {
-    return 0;
-  }
-
-  const damageSynergyFormula = normalizeGameCalcFormula(
-    getGameRowString("Skills", skillRow, "DmgSymPerCalc")
-  );
-  if (!damageSynergyFormula) {
-    return 0;
-  }
-
-  let total = 0;
-  (["aura", "passive"] as const).forEach((prefix) => {
-    const maxIndex = prefix === "aura" ? 6 : 5;
-    for (let index = 1; index <= maxIndex; index += 1) {
-      if (
-        getGameRowString("Skills", skillRow, `${prefix}stat${index}`) !==
-        "damagepercent"
-      ) {
-        continue;
-      }
-
-      const expression = getGameRowString(
-        "Skills",
-        skillRow,
-        getGameStatCalcColumn(prefix, index)
-      );
-      if (normalizeGameCalcFormula(expression) !== damageSynergyFormula) {
-        continue;
-      }
-
-      total += evaluateGameCalcExpression(
-        expression,
         skillRow,
         skillMap,
         level
@@ -5477,19 +5540,14 @@ function createVengeanceElementalDamageComponents(
         itemElementalDamage[element]
       );
       const convertedBaseDamage = addDamageRange(baseDamage, flatSkillDamage);
-      const afterSkillPercent = floorScaleDamageRange(
-        convertedBaseDamage,
-        1 + percent / 100
-      );
       const elementalBonusPercent = getGameElementalBonusPercent(
         element,
         skillMap,
         realStats,
         skillName
       );
-      const damage = scaleDamageRange(
-        afterSkillPercent,
-        elementalBonusPercent
+      const damage = scaleDamageRangeInStages(
+        convertedBaseDamage, percent, elementalBonusPercent
       );
 
       return createDamageComponent({
@@ -5960,10 +6018,9 @@ function parseItemDamageStats(
     min: number,
     max: number
   ) => {
-    const normalizedRange = normalizeDamageRange({ min, max });
     elementalDamage[element] = addDamageRange(
       elementalDamage[element] || createEmptyDamageRange(),
-      normalizedRange
+      { min, max }
     );
   };
 
@@ -5989,7 +6046,9 @@ function parseItemDamageStats(
       magic: createEmptyDamageRange(),
     };
 
-    const expandedElementalDamage = getExpandedItemElementalDamageRanges(item);
+    const expandedElementalDamage = !isWeapon || isSelectedWeapon
+      ? getExpandedItemElementalDamageRanges(item)
+      : {};
     (["fire", "cold", "lightning", "magic"] as const).forEach((element) => {
       const damage = expandedElementalDamage[element];
       if (damage) {
@@ -6143,14 +6202,18 @@ function parseItemDamageStats(
     (["fire", "cold", "lightning", "magic"] as const).forEach((element) => {
       const standaloneRange = standaloneElementalDamage[element];
       if (standaloneRange.min > 0 || standaloneRange.max > 0) {
-        const normalizedRange = normalizeDamageRange(standaloneRange);
-        addElementalRange(element, normalizedRange.min, normalizedRange.max);
+        addElementalRange(element, standaloneRange.min, standaloneRange.max);
       }
     });
   });
 
+  for (const element of ["fire", "cold", "lightning", "magic"] as const) {
+    if (elementalDamage[element]) {
+      elementalDamage[element] = normalizeDamageRange(elementalDamage[element]);
+    }
+  }
   return {
-    flatPhysicalDamage: normalizeDamageRange(flatPhysicalDamage),
+    flatPhysicalDamage,
     nonWeaponEnhancedDamagePct,
     elementalDamage,
     poisonDamage,
@@ -6270,10 +6333,17 @@ function getGameAuraStatValue(
     return undefined;
   }
 
+  const formulaSkillMap = new Map(skillMap);
+  formulaSkillMap.set(getGameRowString("Skills", skillRow, "skill"), {
+    level: aura.level,
+    // A manually entered external aura has no character allocation payload.
+    // Model up to maxlvl hard points; owned auras pass their actual allocation.
+    baseLevel: aura.baseLevel ?? Math.min(aura.level, getGameRowNumber("Skills", skillRow, "maxlvl") || 20),
+  });
   return evaluateGameCalcExpression(
     calc,
     skillRow,
-    skillMap,
+    formulaSkillMap,
     aura.level,
     new Set<string>(),
     {
@@ -6327,8 +6397,11 @@ function getAuraSkillLevelBonus(aura: AuraSource): number {
   return gameValue ?? 0;
 }
 
-function getAuraStrikeStatValue(aura: AuraSource, statName: string): number {
-  const skillMap = new Map<string, SkillEntry>();
+function getAuraStrikeStatValue(
+  aura: AuraSource,
+  statName: string,
+  skillMap: Map<string, SkillEntry>
+): number {
   const selfValue =
     aura.carrier === "self"
       ? getGameAuraStatValue(aura, [statName], "self", skillMap)
@@ -6340,18 +6413,27 @@ function getAuraStrikeStatValue(aura: AuraSource, statName: string): number {
   );
 }
 
-function getAuraStrikeModifiers(aura: AuraSource): DamageStrikeModifiers {
+function getAuraStrikeModifiers(
+  aura: AuraSource,
+  skillMap = EMPTY_SKILL_MAP
+): DamageStrikeModifiers {
   return {
-    criticalChance: getAuraStrikeStatValue(aura, "item_crit_chance"),
-    deadlyStrikeChance: getAuraStrikeStatValue(aura, "item_deadlystrike"),
-    maxDeadlyStrikeChance: getAuraStrikeStatValue(aura, "item_maxdeadlystrike"),
+    criticalChance: getAuraStrikeStatValue(aura, "item_crit_chance", skillMap),
+    deadlyStrikeChance: getAuraStrikeStatValue(aura, "item_deadlystrike", skillMap),
+    maxDeadlyStrikeChance: getAuraStrikeStatValue(
+      aura,
+      "item_maxdeadlystrike",
+      skillMap
+    ),
     criticalMultiplierBonus: getAuraStrikeStatValue(
       aura,
-      "item_crit_multiplier"
+      "item_crit_multiplier",
+      skillMap
     ),
     deadlyStrikeMultiplierBonus: getAuraStrikeStatValue(
       aura,
-      "item_ds_multiplier"
+      "item_ds_multiplier",
+      skillMap
     ),
   };
 }
@@ -6377,7 +6459,7 @@ function applyAuraSkillLevelBonuses(
       skillName,
       {
         ...entry,
-        level: entry.level + skillLevelBonus,
+        level: entry.level > 0 ? entry.level + skillLevelBonus : 0,
       },
     ])
   );
@@ -6542,14 +6624,15 @@ function getAuraPoisonDamage(
       ? getPoisonSkillDamageBonusPercent(realStats)
       : 0;
   const damage = scaleDamageRangeInStages(
-    applyGameDotMultiplier(range, durationFrames),
+    range,
     evaluateGameCalcExpression(
       getGameRowString("Skills", skillRow, "EDmgSymPerCalc"),
       skillRow,
       auraFormulaSkillMap,
       aura.level
     ),
-    poisonSkillDamageBonus
+    poisonSkillDamageBonus,
+    durationFrames
   );
 
   if (!isNonZeroDamageRange(damage)) {
@@ -6615,7 +6698,11 @@ function getAuraPulseDamageComponents(
 ): DamageComponent[] {
   const auraSkillName = getAuraFormulaSkillName(aura.name);
   const skillRow = getGameRow("Skills", auraSkillName);
-  if (!skillRow || getGameRowString("Skills", skillRow, "aura") !== "1") {
+  if (
+    !skillRow ||
+    getGameRowString("Skills", skillRow, "aura") !== "1" ||
+    !["66", "81"].includes(getGameRowString("Skills", skillRow, "srvdofunc"))
+  ) {
     return [];
   }
 
@@ -6696,12 +6783,15 @@ function getAuraPulseProfileFields(
 function getManualAuraLevelBonus(
   auraName: string,
   level: number,
-  carrier: AuraCarrier
+  carrier: AuraCarrier,
+  baseLevel?: number,
+  context?: WeaponSetContext
 ): DamageAuraLevelBonus {
   const aura: AuraSource = {
     name: auraName,
     level,
-    source: "manual",
+    baseLevel,
+    source: context ? "player_skill" : "manual",
     carrier,
   };
 
@@ -6709,11 +6799,20 @@ function getManualAuraLevelBonus(
     level,
     skillLevelBonus: getAuraSkillLevelBonus(aura),
     physicalBonusPercent: getAuraPhysicalDamagePercent(aura),
-    elementalDamage: getAuraAttackDamage(aura, new Map()),
-    poisonDamage: getAuraPoisonDamage(aura, new Map()),
-    strikeModifiers: getAuraStrikeModifiers(aura),
+    elementalDamage: getAuraAttackDamage(
+      aura,
+      context?.skillMap || new Map(),
+      context?.realStats
+    ),
+    poisonDamage: getAuraPoisonDamage(
+      aura,
+      context?.skillMap || new Map(),
+      context?.realStats
+    ),
+    strikeModifiers: getAuraStrikeModifiers(aura, context?.skillMap),
   };
 }
+
 
 function skillHasServerMissiles(skillRow: string[]): boolean {
   return SERVER_SKILL_MISSILE_COLUMNS.some((columnName) =>
@@ -7125,7 +7224,9 @@ function getSummonModeNotes(
     `${skillName} is modeled as a per-summon damage profile from Skills.txt summon/sumskill fields and MonStats.txt attack fields when present; pet count, AI choices, attack speed, hit chance, target count, and uptime are not multiplied into totals.`,
   ];
 
-  if (variantDefinition) {
+  if (variantDefinition?.difficultySuffix !== undefined) {
+    notes.push(`Summon base attack damage uses ${variantDefinition.label} difficulty from MonStats.txt.`);
+  } else if (variantDefinition) {
     notes.push(
       `${variantDefinition.label} is modeled as one ${skillName} elemental variant; other variants are separate skill options and are not summed into this profile.`
     );
@@ -7147,6 +7248,8 @@ function getSummonModeNotes(
     notes.push(
       "MonStats.txt does not expose a stable monster row for this summon in the current extract; only Skills.txt payloads are modeled."
     );
+  } else if (getGameRowNumber("MonStats", monsterRow, "Crit") > 0) {
+    notes.push("Summon totals represent ordinary hits; the monster's innate critical-hit roll is not included in these totals.");
   }
 
   return notes;
@@ -7170,9 +7273,10 @@ function buildSummonProfile(
       ? undefined
       : getSummonAuraSource({
           name: playerAuraOption.name,
-          level:
-            getSkillEntry(skillMap, playerAuraOption.name).level ||
-            playerAuraOption.level,
+          level: playerAuraOption.level,
+          baseLevel: playerAuraOption.source === "character_skill"
+            ? getSkillEntry(skillMap, playerAuraOption.name).baseLevel
+            : undefined,
           source:
             playerAuraOption.source === "character_skill"
               ? ("player_skill" as const)
@@ -7213,18 +7317,12 @@ function buildSummonProfile(
       return component;
     }
 
-    const duplicateDirectPercent = getDuplicateDirectSummonDamagePercent(
-      component,
-      sourceSkillName,
-      selectedSkillRow,
-      selectedSkillLevel,
-      effectiveSkillMap
-    );
-    const componentPhysicalBonusPercent =
-      Math.max(0, summonDamagePercent - duplicateDirectPercent) + auraPercent;
+    // DmgSymPerCalc scales the source damage; the summoned unit's
+    // damagepercent is a separate attack-stage bonus, even if formulas match.
+    const componentPhysicalBonusPercent = summonDamagePercent + auraPercent;
     return scalePhysicalDamageComponent(
       component,
-      1 + componentPhysicalBonusPercent / 100
+      componentPhysicalBonusPercent
     );
   });
   const auraElementalComponents: DamageComponent[] = [];
@@ -7380,9 +7478,10 @@ function buildSpellProfile(
       ? undefined
       : {
           name: playerAuraOption.name,
-          level:
-            getSkillEntry(skillMap, playerAuraOption.name).level ||
-            playerAuraOption.level,
+          level: playerAuraOption.level,
+          baseLevel: playerAuraOption.source === "character_skill" && playerAuraCarrier === "self"
+            ? getSkillEntry(skillMap, playerAuraOption.name).baseLevel
+            : undefined,
           source:
             playerAuraOption.source === "character_skill" &&
             playerAuraCarrier === "self"
@@ -7513,6 +7612,10 @@ function buildSequenceProfile(
   const damageComponents = hitProfiles.flatMap(({ hit, profile }, index) =>
     profile.damageComponents.map((component) => ({
       ...component,
+      physicalBonusPercent:
+        component.damageType === "physical"
+          ? profile.breakdown.physicalBonusPercent.total
+          : component.physicalBonusPercent,
       id: `sequence:${index + 1}:${component.id}`,
       label: `${hit.label}: ${component.label}`,
     }))
@@ -7527,14 +7630,8 @@ function buildSequenceProfile(
       ),
     }))
   );
-  const auraPulseDamageComponents = hitProfiles.flatMap(
-    ({ hit, profile }, index) =>
-      (profile.auraPulseDamageComponents || []).map((component) => ({
-        ...component,
-        id: `sequence:${index + 1}:${component.id}`,
-        label: `${hit.label}: ${component.label}`,
-      }))
-  );
+  // Pulses belong to the aura carrier, not to each weapon hit in the cycle.
+  const auraPulseDamageComponents = hitProfiles[0]?.profile.auraPulseDamageComponents || [];
   const damageTotals = buildDamageTotals(damageComponents);
   const totalPhysicalDamage =
     damageTotals.byElement.physical || createEmptyDamageRange();
@@ -7577,6 +7674,7 @@ function buildSequenceProfile(
       firstProfile?.playerAuraLevel ?? playerAuraSelection.option.level,
     transformationId: "none",
     skillDamageMode: "weapon",
+    attackDamageMultiplier: firstProfile?.attackDamageMultiplier,
     skillName: skillOption.name,
     sourceSkillName: skillOption.sourceSkillName,
     chargeVariant: skillOption.chargeVariant,
@@ -7673,9 +7771,10 @@ function buildProfile(
       ? undefined
       : {
           name: playerAuraOption.name,
-          level:
-            getSkillEntry(skillMap, playerAuraOption.name).level ||
-            playerAuraOption.level,
+          level: playerAuraOption.level,
+          baseLevel: playerAuraOption.source === "character_skill" && playerAuraCarrier === "self"
+            ? getSkillEntry(skillMap, playerAuraOption.name).baseLevel
+            : undefined,
           source:
             playerAuraOption.source === "character_skill" &&
             playerAuraCarrier === "self"
@@ -7803,9 +7902,13 @@ function buildProfile(
     : 0;
   const weaponSourceModifier = getWeaponSourceDamageModifier(selectedSkillName);
   const carriedWeaponDamage = {
-    min: Math.floor(weaponSelection.damage.min * weaponSourceModifier),
-    max: Math.floor(weaponSelection.damage.max * weaponSourceModifier),
+    min: weaponSelection.damage.min * weaponSourceModifier,
+    max: weaponSelection.damage.max * weaponSourceModifier,
   };
+  const equipmentPhysicalDamage = normalizeDamageRange({
+    min: (weaponSelection.damage.min + flatPhysicalDamage.min) * weaponSourceModifier,
+    max: (weaponSelection.damage.max + flatPhysicalDamage.max) * weaponSourceModifier,
+  });
   const usesKickSource = weaponSelection.option.handMode === "kick";
   const usesShieldSource = weaponSelection.option.handMode === "smite";
   const weaponSourceLabel = usesKickSource
@@ -7839,7 +7942,7 @@ function buildProfile(
     : usesShieldSource
       ? "itypea1=shld and weapsel=4 mark Smite as a shield-sourced attack in the game-file skill row."
     : weaponSourceSrcDam > 0
-      ? `SrcDam=${weaponSourceSrcDam} is the game-file source-damage scalar; the extracted files expose the raw value but not the engine denominator.`
+      ? `SrcDam=${weaponSourceSrcDam}/128 scales weapon-carried physical and elemental damage.`
       : "Source-damage and attack-signal fields are preserved from game files; opaque engine function behavior is not inferred.";
   const flatAndSkillPhysicalDamage = addDamageRange(
     flatPhysicalDamage,
@@ -7848,7 +7951,6 @@ function buildProfile(
       createEmptyDamageRange()
     )
   );
-  const physicalMultiplier = 1 + totalPhysicalBonusPercent / 100;
   const physicalBaseComponents: DamageComponent[] = [];
 
   if (isSmiteProfile) {
@@ -7884,17 +7986,22 @@ function buildProfile(
         })
       );
     }
-  } else if (isNonZeroDamageRange(carriedWeaponDamage)) {
+  } else if (isNonZeroDamageRange(equipmentPhysicalDamage)) {
     physicalBaseComponents.push(
       createDamageComponent({
         id: `weapon:${weaponSelection.option.id}:${selectedSkillName}`,
         label: weaponSourceLabel,
         source: "weapon",
         damageType: "physical",
-        damage: carriedWeaponDamage,
-        baseDamage: carriedWeaponDamage,
+        damage: equipmentPhysicalDamage,
+        baseDamage: equipmentPhysicalDamage,
         sourceRefs: [
           ...equipmentDamageSourceRefs,
+          {
+            table: "Armory item text",
+            columns: ["+minimum damage", "+maximum damage", "adds damage"],
+            note: "Off-weapon flat damage is added to the weapon before SrcDam and physical percentage bonuses.",
+          },
           ...(selectedSkillName === "Basic Attack"
             ? []
             : [
@@ -7912,25 +8019,6 @@ function buildProfile(
     );
   }
 
-  if (!isSmiteProfile && isNonZeroDamageRange(flatPhysicalDamage)) {
-    physicalBaseComponents.push(
-      createDamageComponent({
-        id: `item-flat-physical:${weaponSelection.option.id}`,
-        label: "Item flat physical",
-        source: "item",
-        damageType: "physical",
-        damage: flatPhysicalDamage,
-        baseDamage: flatPhysicalDamage,
-        sourceRefs: [
-          {
-            table: "Armory item text",
-            columns: ["+minimum damage", "+maximum damage", "adds damage"],
-          },
-        ],
-      })
-    );
-  }
-
   if (!isSmiteProfile) {
     physicalSkillDamageComponents.forEach((component) => {
       physicalBaseComponents.push({
@@ -7941,7 +8029,7 @@ function buildProfile(
   }
 
   const physicalComponents = physicalBaseComponents.map((component) =>
-    scalePhysicalDamageComponent(component, physicalMultiplier)
+    scalePhysicalDamageComponent(component, totalPhysicalBonusPercent)
   );
   let strikeModifiers = getItemStrikeModifiers(
     playerItems,
@@ -7963,7 +8051,10 @@ function buildProfile(
   activeAuras.forEach((aura) => {
     strikeModifiers = addStrikeModifiers(
       strikeModifiers,
-      getAuraStrikeModifiers(aura)
+      getAuraStrikeModifiers(
+        aura,
+        aura.carrier === "self" ? effectiveSkillMap : EMPTY_SKILL_MAP
+      )
     );
   });
   const strikeBreakdowns = skillCanApplyStrikeDamage(selectedSkillName)
@@ -7999,9 +8090,17 @@ function buildProfile(
       return;
     }
 
+    const isMeleeHit = weaponSelection.option.handMode !== "missile" &&
+      (selectedSkillName === "Basic Attack" || (selectedSkillRow &&
+        getGameRowString("Skills", selectedSkillRow, "range") === "h2h"));
     const elementalSkillDamageBonus =
-      getElementalSkillDamageBonusPercent(element, realStats);
-    const scaledDamage = scaleDamageRange(damage, elementalSkillDamageBonus);
+      getElementalSkillDamageBonusPercent(element, realStats) +
+      (isMeleeHit && element !== "magic"
+        ? getGameMasteryDamageBonusPercent(element, effectiveSkillMap)
+        : 0);
+    const scaledDamage = scaleDamageRangeInStages(
+      damage, elementalSkillDamageBonus, 0, weaponSourceModifier
+    );
 
     itemElementalComponents.push(
       createDamageComponent({
@@ -8068,7 +8167,7 @@ function buildProfile(
           label: `${aura.name} ${element}`,
           source: "aura",
           damageType: element,
-          damage,
+          damage: floorScaleDamageRange(damage, weaponSourceModifier),
           sourceRefs: [
             {
               table: "Skills.txt",
@@ -8096,7 +8195,14 @@ function buildProfile(
       "aura"
     );
     if (poisonComponent) {
-      auraElementalComponents.push(poisonComponent);
+      auraElementalComponents.push({
+        ...poisonComponent,
+        damage: floorScaleDamageRange(poisonComponent.damage, weaponSourceModifier),
+        poisonDamage: poisonComponent.poisonDamage ? {
+          ...poisonComponent.poisonDamage,
+          total: Math.floor(poisonComponent.poisonDamage.total * weaponSourceModifier),
+        } : undefined,
+      });
     }
   });
 
@@ -8204,6 +8310,21 @@ function buildProfile(
     );
   }
 
+  const targetDamageBonuses = playerItems.reduce((total, item) => {
+    if (!isEquippedItem(item) && !isActiveInventoryCharm(item)) return total;
+    if (item.category === "weapon" && item !== weaponSelection.item) return total;
+    const stats = expandItemStats(item);
+    return {
+      demon: total.demon + (stats.item_demondamage_percent || 0) + Math.floor((stats.item_damage_demon_perlevel || 0) * characterData.character.level / 8),
+      undead: total.undead + (stats.item_undeaddamage_percent || 0) + Math.floor((stats.item_damage_undead_perlevel || 0) * characterData.character.level / 8),
+    };
+  }, { demon: 0, undead: getItemWeaponTypeCodes(weaponSelection.item).has("blun") ? 50 : 0 });
+  damageComponents.forEach((component) => {
+    if (component.damageType === "physical" && component.baseDamage && !isSmiteProfile) {
+      component.targetDamageBonuses = targetDamageBonuses;
+    }
+  });
+
   return {
     key: `${weaponSelection.option.id}::${skillOption.id}${getSkillProfileKeySuffix(skillOption)}::${playerAuraOption.id}:${playerAuraOption.level}::${playerAuraCarrier}`,
     weaponId: weaponSelection.option.id,
@@ -8213,6 +8334,7 @@ function buildProfile(
     playerAuraLevel: playerAuraOption.level,
     transformationId: "none",
     skillDamageMode: "weapon",
+    attackDamageMultiplier: weaponSourceModifier,
     skillName: displaySkillName,
     sourceSkillName: skillOption.sourceSkillName,
     chargeVariant: skillOption.chargeVariant,
@@ -8338,6 +8460,512 @@ export function getModeledDamageMechanicCoverage() {
     });
 }
 
+function buildCombatData(
+  character: CharacterData,
+  contexts: Record<WeaponSet, WeaponSetContext>,
+  selections: WeaponSelection[],
+  skills: DamageSkillOption[],
+  auras: DamageAuraOption[]
+): DamageCombatData {
+  const level = character.character.level;
+  const className = character.character.class.name;
+  const classToken =
+    (
+      {
+        Amazon: "AM",
+        Sorceress: "SO",
+        Necromancer: "NE",
+        Paladin: "PA",
+        Barbarian: "BA",
+        Druid: "DZ",
+        Assassin: "AI",
+      } as Record<string, string>
+    )[className] || "BA";
+  const levelStats = Object.entries(getGameTable("ItemStatCost").rowsByKey)
+    .filter(
+      ([, row]) =>
+        getGameRowString("ItemStatCost", row, "op") === "2" &&
+        getGameRowString("ItemStatCost", row, "op base") === "level"
+    )
+    .map(([name, row]) => [
+      name,
+      getGameRowString("ItemStatCost", row, "op stat1"),
+    ]);
+  const totals = new Map<string, Record<string, number>>();
+  const statTotal = (selection: WeaponSelection, stat: string) => {
+    const cached = totals.get(selection.option.id);
+    if (cached) return cached[stat] || 0;
+    const context = contexts[selection.weaponSet];
+    const ledger: Record<string, number> = {};
+    context.playerItems
+      .filter((item) => isEquippedItem(item) || isActiveInventoryCharm(item))
+      .forEach((item) => {
+        const expanded = expandItemStats(item);
+        const otherWeapon =
+          item.category === "weapon" &&
+          ALL_HAND_EQUIPMENT_SLOTS.has(item.location?.equipment || "") &&
+          item !== selection.item;
+        const applies = (name: string) => {
+          const row = getGameRow("ItemStatCost", name);
+          return (
+            !otherWeapon ||
+            !row ||
+            getGameRowString("ItemStatCost", row, "damagerelated") !== "1"
+          );
+        };
+        Object.entries(expanded).forEach(([name, value]) => {
+          if (applies(name)) ledger[name] = (ledger[name] || 0) + value;
+        });
+        // Armory modifiers already decode the per-level unit (including fractional values).
+        levelStats.forEach(([name, target]) => {
+          if (expanded[name] && applies(target))
+            ledger[target] =
+              (ledger[target] || 0) + Math.floor(expanded[name] * level);
+        });
+      });
+    totals.set(selection.option.id, ledger);
+    return ledger[stat] || 0;
+  };
+  const mastery = (
+    selection: WeaponSelection,
+    bonus: number,
+    statNames = [
+      "passive_tohit",
+      "passive_mastery_melee_th",
+      "passive_mastery_throw_th",
+      "item_tohit_percent",
+    ]
+  ) => {
+    const skillMap = bonus === 0 ? contexts[selection.weaponSet].skillMap : new Map(
+      Array.from(contexts[selection.weaponSet].skillMap, ([name, entry]) => [name,
+        { ...entry, level: entry.level > 0 ? entry.level + bonus : 0 }])
+    );
+    let total = 0;
+    const seen = new Set<string>();
+    skillMap.forEach((entry, name) => {
+      if (entry.level <= 0) return;
+      const row = getGameRow("Skills", name);
+      if (!row) return;
+      if (
+        getGameRowString("Skills", row, "passive") !== "1" &&
+        !getGameRowString("Skills", row, "passivestate")
+      )
+        return;
+      const key = getGameRowString("Skills", row, "skill");
+      if (
+        key === "One Hand Mastery" &&
+        selection.option.handMode !== "one_handed"
+      )
+        return;
+      if (
+        key === "Two Hand Mastery" &&
+        selection.option.handMode !== "two_handed"
+      )
+        return;
+      if (
+        seen.has(key) ||
+        !passiveStrikeSkillAppliesToWeapon(name, row, selection)
+      )
+        return;
+      seen.add(key);
+      const slot = [1, 2, 3, 4, 5].find((index) =>
+        statNames.includes(
+          getGameRowString("Skills", row, `passivestat${index}`)
+        )
+      );
+      const calc = slot
+        ? getGameRowString("Skills", row, `passivecalc${slot}`)
+        : "";
+      total += /(?<!\.)\bblvl\b/.test(calc)
+        ? evaluateGameCalcExpression(
+            calc.replace(/(?<!\.)\bblvl\b/g, String(entry.baseLevel)),
+            row,
+            skillMap,
+            entry.level
+          )
+        : getGameSkillPassiveStatValue(name, statNames, skillMap) || 0;
+    });
+    return total;
+  };
+  const weaponData = (selection: WeaponSelection): CombatWeapon => {
+    const context = contexts[selection.weaponSet];
+    const weapon = combatWeapons.get(
+      selection.item.base_code || selection.item.base?.id || ""
+    );
+    const pierce = emptyCombatResistances();
+    const statNames: Record<keyof CombatResistances, string> = {
+      physical: "passive_phys_pierce",
+      fire: "passive_fire_pierce",
+      cold: "passive_cold_pierce",
+      lightning: "passive_ltng_pierce",
+      magic: "passive_mag_pierce",
+      poison: "passive_pois_pierce",
+    };
+    (Object.keys(pierce) as Array<keyof CombatResistances>).forEach(
+      (element) => {
+        pierce[element] =
+          statTotal(selection, statNames[element]) +
+          mastery(selection, 0, [statNames[element]]);
+      }
+    );
+    const passiveIAS = mastery(selection, 0, ["item_fasterattackrate"]);
+    const skillBonuses = Array.from({ length: 8 }, (_, bonus) => {
+      const extraPierce = emptyCombatResistances();
+      (Object.keys(extraPierce) as Array<keyof CombatResistances>).forEach(
+        (element) => {
+          extraPierce[element] =
+            mastery(selection, bonus, [statNames[element]]) -
+            mastery(selection, 0, [statNames[element]]);
+        }
+      );
+      return {
+        pierce: extraPierce,
+        baseAttackRating:
+          mastery(selection, bonus, ["tohit"]) -
+          mastery(selection, 0, ["tohit"]),
+        gearIAS:
+          mastery(selection, bonus, ["item_fasterattackrate"]) - passiveIAS,
+        crushingBlow:
+          mastery(selection, bonus, ["item_crushingblow"]) -
+          mastery(selection, 0, ["item_crushingblow"]),
+        crushingEfficiency:
+          mastery(selection, bonus, ["item_crushingblow_efficiency"]) -
+          mastery(selection, 0, ["item_crushingblow_efficiency"]),
+        openWounds:
+          mastery(selection, bonus, ["item_openwounds"]) -
+          mastery(selection, 0, ["item_openwounds"]),
+        openWoundsDps:
+          mastery(selection, bonus, ["deep_wounds"]) -
+          mastery(selection, 0, ["deep_wounds"]),
+      };
+    });
+    return {
+      skillBonuses,
+      baseAttackRating:
+        5 *
+          (context.realStats?.dexterity ||
+            character.character.attributes.dexterity) -
+        35 +
+        Number(combatClasses.get(className)?.ToHitFactor || 0) +
+        statTotal(selection, "tohit") +
+        mastery(selection, 0, ["tohit"]),
+      attackRatingPercent: statTotal(selection, "item_tohit_percent"),
+      mastery: Array.from({ length: 8 }, (_, i) => mastery(selection, i)),
+      weaponClass: weapon
+        ? selection.option.handMode === "two_handed"
+          ? weapon["2handedwclass"] || weapon.wclass
+          : weapon.wclass
+        : "hth",
+      ownWeaponClass: weapon
+        ? selection.option.handMode === "two_handed"
+          ? weapon["2handedwclass"] || weapon.wclass
+          : weapon.wclass
+        : "hth",
+      speed: Number(weapon?.speed || 0),
+      weaponIAS: expandItemStats(selection.item).item_fasterattackrate || 0,
+      gearIAS:
+        statTotal(selection, "item_fasterattackrate") -
+        (expandItemStats(selection.item).item_fasterattackrate || 0) +
+        passiveIAS,
+      fcr: statTotal(selection, "item_fastercastrate"),
+      ignoreDefense: statTotal(selection, "item_ignoretargetac") > 0,
+      targetDefensePercent:
+        statTotal(selection, "item_fractionaltargetac") +
+        mastery(selection, 0, ["item_fractionaltargetac"]),
+      demonAttackRating: statTotal(selection, "item_demon_tohit"),
+      undeadAttackRating: statTotal(selection, "item_undead_tohit"),
+      demonDamage: statTotal(selection, "item_demondamage_percent"),
+      undeadDamage:
+        statTotal(selection, "item_undeaddamage_percent") +
+        (getItemWeaponTypeCodes(selection.item).has("blun") ? 50 : 0),
+      crushingBlow:
+        statTotal(selection, "item_crushingblow") +
+        mastery(selection, 0, ["item_crushingblow"]),
+      crushingEfficiency:
+        statTotal(selection, "item_crushingblow_efficiency") +
+        mastery(selection, 0, ["item_crushingblow_efficiency"]),
+      openWounds:
+        statTotal(selection, "item_openwounds") +
+        mastery(selection, 0, ["item_openwounds"]),
+      openWoundsDps:
+        statTotal(selection, "deep_wounds") +
+        mastery(selection, 0, ["deep_wounds"]),
+      pierce,
+    };
+  };
+  const weapons: DamageCombatData["weapons"] = {};
+  selections.forEach((selection) => {
+    if (selection.sequenceHits?.length) {
+      const hands = selection.sequenceHits.map((hit) =>
+        weaponData(hit.selection)
+      );
+      const fastest = hands.reduce((a, b) =>
+        -a.speed + a.weaponIAS >= -b.speed + b.weaponIAS ? a : b
+      );
+      weapons[selection.option.id] = {
+        ...hands[0],
+        speed: fastest.speed,
+        weaponIAS: fastest.weaponIAS,
+        gearIAS: fastest.gearIAS,
+        hands,
+      };
+    } else weapons[selection.option.id] = weaponData(selection);
+  });
+  const effect = (
+    name: string,
+    skillMap: Map<string, SkillEntry>,
+    level: number
+  ) => {
+    const row = getGameRow("Skills", getAuraFormulaSkillName(name));
+    const stat = (statName: string, source: "self" | "party" = "party") => {
+      const calc = row
+        ? findGameAuraStatCalc(row, [statName], source)?.trim()
+        : undefined;
+      // These reducers negate an integer expression; floor the positive magnitude before negating.
+      if (row && calc?.startsWith("-"))
+        return -evaluateGameCalcExpression(calc.slice(1), row, skillMap, level);
+      return row
+        ? getGameAuraStatValue(
+            { name, level, source: "player_skill", carrier: source },
+            [statName],
+            source,
+            skillMap
+          ) || 0
+        : 0;
+    };
+    const reductions = emptyCombatResistances();
+    (Object.keys(reductions) as Array<keyof CombatResistances>).forEach(
+      (element) => {
+        reductions[element] = Math.max(0, -stat(combatElementStats[element]));
+      }
+    );
+    const attackRatingPercent = Math.max(0, stat("item_tohit_percent"));
+    return {
+      attackSpeed: ["Fanaticism", "Werewolf", "Burst of Speed"].includes(name)
+        ? stat("attackrate")
+        : 0,
+      attackRatingPercent,
+      selfAttackRatingPercent:
+        Math.max(0, stat("item_tohit_percent", "self")) || attackRatingPercent,
+      defensePercent: Math.max(0, -stat("skill_armor_percent")),
+      defenseFlat: Math.max(0, -stat("armorclass")),
+      reductions,
+    };
+  };
+  const skillData: DamageCombatData["skills"] = {};
+  skills.forEach((skill) => {
+    const name = skill.sourceSkillName || skill.name;
+    const row = getGameRow("Skills", name);
+    const context = contexts.primary;
+    skillData[skill.id] = {
+      animation: row ? getGameRowString("Skills", row, "anim") : "A1",
+      sequence: row ? getGameRowString("Skills", row, "seqnum") : "",
+      attackRate: skill.damageMode === "weapon",
+      rollback: row
+        ? getGameRowNumber(
+            "Skills",
+            row,
+            name === "Strafe" ? "Param6" : "Param2"
+          )
+        : 100,
+      levels: Array.from({ length: 81 }, (_, level) => {
+        const reductions = effect(name, context.skillMap, level).reductions;
+        const pierce = emptyCombatResistances();
+        if (name === "Summon Dire Wolf" || name === "Summon Fenris")
+          pierce.physical = row
+            ? evaluateGameCalcExpression(
+                getGameRowString("Skills", row, "passivecalc4"),
+                row,
+                context.skillMap,
+                level
+              )
+            : 0;
+        if (name === "Poison Strike" || name === "Poison Dagger")
+          pierce.poison = row
+            ? evaluateGameCalcExpression(
+                findGameAuraStatCalc(row, ["passive_pois_pierce"], "party") || "",
+                row,
+                context.skillMap,
+                level
+              )
+            : 0;
+        const hits = !row
+          ? 1
+          : ["Zeal", "Fury"].includes(name)
+            ? Math.min(
+                getGameSkillParam(row, 5) + level - 1,
+                getGameSkillParam(row, 6)
+              )
+            : name === "Dragon Talon"
+              ? Math.min(Math.floor(level / 6) + 1, 3)
+              : name === "Fend"
+                ? 3
+                : name === "Strafe"
+                  ? Math.min(
+                      2 + Math.floor(level / 4),
+                      getGameSkillParam(row, 4)
+                    )
+                  : 1;
+        return {
+          attackRatingPercent: row
+            ? getGameRowString("Skills", row, "ToHitCalc")
+              ? evaluateGameCalcExpression(
+                  getGameRowString("Skills", row, "ToHitCalc"),
+                  row,
+                  context.skillMap,
+                  level
+                )
+              : getGameRowNumber("Skills", row, "ToHit") +
+                Math.max(0, level - 1) *
+                  getGameRowNumber("Skills", row, "LevToHit")
+            : 0,
+          cooldown: row
+            ? evaluateGameCalcExpression(
+                getGameRowString("Skills", row, "delay"),
+                row,
+                context.skillMap,
+                level
+              )
+            : 0,
+          attackSpeed:
+            name === "Frenzy" && row
+              ? evaluateGameCalcExpression(
+                  getGameRowString("Skills", row, "aurastatcalc2"),
+                  row,
+                  context.skillMap,
+                  level
+                )
+              : row &&
+                  getGameRowString("Skills", row, "aurastate") === "temp_skill_buff"
+                ? evaluateGameCalcExpression(
+                    findGameAuraStatCalc(row, ["attackrate"], "party") || "",
+                    row,
+                    context.skillMap,
+                    level
+                  )
+                : 0,
+          hits: Math.max(1, hits),
+          reductions,
+          pierce,
+          crushingBlow:
+            name === "Smite" && row
+              ? evaluateGameCalcExpression(
+                  getGameRowString("Skills", row, "calc3").replace(
+                    /(?<!\.)\bblvl\b/g,
+                    String(getGameSkillEntry(context.skillMap, name).baseLevel)
+                  ),
+                  row,
+                  context.skillMap,
+                  level
+                )
+              : 0,
+          crushingEfficiency:
+            name === "Smite" && row
+              ? evaluateGameCalcExpression(
+                  getGameRowString("Skills", row, "calc4"),
+                  row,
+                  context.skillMap,
+                  level
+                )
+              : 0,
+        };
+      }),
+    };
+  });
+  const effects: DamageCombatData["effects"] = {};
+  [
+    ...PLAYER_AURA_DEFINITIONS.map((a) => a.name),
+    "Amplify Damage",
+    "Decrepify",
+    "Lower Resist",
+    "Battle Cry",
+    "Inner Sight",
+    "Werewolf",
+    "Burst of Speed",
+    "Poison Creeper",
+    "Static Field",
+    "Arctic Blast",
+    "Inferno",
+  ].forEach((name) => {
+    effects[name] = Array.from({ length: 81 }, (_, level) =>
+      effect(name, contexts.primary.skillMap, level)
+    );
+  });
+  const werewolfAttackRatingBonuses = Array.from({ length: 8 }, (_, bonus) => {
+    const boosted = new Map(
+      Array.from(contexts.primary.skillMap, ([name, entry]) => [
+        name,
+        { ...entry, level: entry.level > 0 ? entry.level + bonus : 0 },
+      ])
+    );
+    return (
+      effect("Werewolf", boosted, 1).attackRatingPercent -
+      effect("Werewolf", contexts.primary.skillMap, 1).attackRatingPercent
+    );
+  });
+  const auraPulses: NonNullable<DamageCombatData["auraPulses"]> = {
+    primary: {},
+    secondary: {},
+  };
+  PLAYER_AURA_DEFINITIONS.forEach((definition) => {
+    const row = getGameRow("Skills", definition.skillName);
+    if (
+      !row ||
+      !["66", "81"].includes(getGameRowString("Skills", row, "srvdofunc"))
+    )
+      return;
+    const owned = Object.values(contexts).some(
+      (context) =>
+        getGameSkillEntry(context.skillMap, definition.skillName).level > 0
+    );
+    (["primary", "secondary"] as const).forEach((weaponSet) => {
+      const context = contexts[weaponSet];
+      auraPulses[weaponSet][definition.name] = Array.from(
+        { length: 81 },
+        (_, level) => {
+          const ranges: Partial<Record<DamageElement, DamageRange>> = {};
+          if (!level) return ranges;
+          getAuraPulseDamageComponents(
+            {
+              name: definition.name,
+              level,
+              carrier: "self",
+              source: owned ? "player_skill" : "manual",
+            },
+            context.skillMap,
+            context.realStats,
+            "combat-pulse"
+          ).forEach((component) => {
+            const element = component.damageType;
+            if (element === "critical" || element === "deadly") return;
+            const previous = ranges[element] || { min: 0, max: 0 };
+            ranges[element] = {
+              min: previous.min + component.damage.min,
+              max: previous.max + component.damage.max,
+            };
+          });
+          return ranges;
+        }
+      );
+    });
+  });
+  return {
+    level,
+    classToken,
+    weapons,
+    skills: skillData,
+    effects,
+    werewolfAttackRatingBonuses,
+    commandSelfBonuses: Array.from({ length: 81 }, (_, level) => {
+      const option = auras.find((aura) => aura.id === "Battle Command");
+      const curve = option?.selfLevelBonusesByWeaponSet?.primary || option?.selfLevelBonuses;
+      return curve?.[Math.max(0, level - 1)]?.skillLevelBonus || 0;
+    }),
+    commandPartyBonuses: Array.from({ length: 81 }, (_, level) => getManualAuraLevelBonus("Battle Command", level, "party").skillLevelBonus),
+    auraPulses,
+  };
+}
+
 export function calculateDamage(
   characterData: CharacterData
 ): DamageCalculation {
@@ -8378,6 +9006,72 @@ export function calculateDamage(
       );
     })
   );
+  const targetStatsBySet = new Map<WeaponSet, { activeItems: IItem[]; convictionLevel: number }>();
+  for (const profile of profiles) {
+    const weapon = weaponSelections.find((selection) => selection.option.id === profile.weaponId)!;
+    const context = contexts[weapon.weaponSet];
+    const skillMap = applyAuraSkillLevelBonuses(context.skillMap, profile.activeAuras as AuraSource[]);
+    let targetStats = targetStatsBySet.get(weapon.weaponSet);
+    if (!targetStats) {
+      // This context already contains only the selected weapon set; its slot
+      // names retain "Switch" until attribute/skill normalization.
+      const activeItems = context.playerItems.filter((item) => isEquippedItem(item) || isActiveInventoryCharm(item));
+      const convictionLevels = [...activeItems, ...(characterData.mercenary?.items || [])]
+        .flatMap((item) => item.properties.map((property) => property ? parseAuraProperty(property) : null))
+        .filter((aura) => aura?.name === "Conviction").map((aura) => aura!.level);
+      targetStats = { activeItems, convictionLevel: Math.max(0, ...convictionLevels) };
+      targetStatsBySet.set(weapon.weaponSet, targetStats);
+    }
+    const selectedSkillName = profile.sourceSkillName || profile.skillName;
+    const excludesInheritedPierce = /Sentry$/.test(selectedSkillName) ||
+      /^(?:Wake of Fire|Wake of Inferno|Hydra|Lesser Hydra|Fire ?Golem)$/.test(selectedSkillName);
+    const isPetProfile = profile.skillDamageMode === "summon" || excludesInheritedPierce;
+    const itemPierce = (element: DamageElement, selection: WeaponSelection) =>
+      targetStats!.activeItems.reduce((total, item) => {
+        if (element === "physical") {
+          if (profile.skillDamageMode === "weapon" && item.category === "weapon" &&
+              (item.hash || String(item.id)) !== (selection.item.hash || String(selection.item.id))) return total;
+        }
+        const code = { physical: "phys", fire: "fire", cold: "cold", lightning: "ltng", poison: "pois", magic: "mag" }[element];
+        const stats = expandItemStats(item);
+        return total + (stats[`passive_${code}_pierce`] || 0) + (stats[`item_pierce_${code}`] || 0);
+      }, 0);
+    const resolvePierce = (element: DamageElement, selection = weapon) => {
+      const code = { physical: "phys", fire: "fire", cold: "cold", lightning: "ltng", poison: "pois", magic: "mag" }[element];
+      const stat = `passive_${code}_pierce`;
+      const rawInherited = itemPierce(element, selection) + getGlobalPlayerPassiveStatValue(
+        stat, skillMap,
+        profile.skillDamageMode === "weapon" || selectedSkillName === "Blade Sentinel" ? selection : undefined
+      );
+      if (selectedSkillName === "Blade Sentinel" && element === "physical") {
+        return Math.floor(rawInherited / 2);
+      }
+      const inherited = excludesInheritedPierce ? 0 : profile.skillDamageMode === "summon"
+        ? element === "physical" ? 0 : Math.floor(rawInherited / 2)
+        : rawInherited;
+      const localPierce = isPetProfile
+        ? getGameSkillPassiveStatValue(selectedSkillName, [stat], skillMap) || 0
+        : getGameSkillAuraStatValue(selectedSkillName, [stat], skillMap) || 0;
+      return inherited + localPierce;
+    };
+    const resistancePierce: Partial<Record<DamageElement, number>> = {};
+    for (const element of ["physical", "fire", "cold", "lightning", "poison", "magic"] as DamageElement[]) {
+      resistancePierce[element] = resolvePierce(element);
+    }
+    profile.strikeBreakdowns.forEach((strike) => {
+      const sequenceIndex = Number(strike.id.match(/^sequence:(\d+):/)?.[1] || 0) - 1;
+      const strikeWeaponId = sequenceIndex >= 0 ? profile.sequenceHits?.[sequenceIndex]?.weaponId : profile.weaponId;
+      const strikeWeapon = weaponSelections.find((selection) => selection.option.id === strikeWeaponId) || weapon;
+      strike.resistancePierce = resolvePierce("physical", strikeWeapon);
+    });
+    const selectedConvictionLevel = Math.max(0, ...profile.activeAuras
+      .filter((aura) => aura.name === "Conviction")
+      .map((aura) => aura.level));
+    profile.targetModifiers = {
+      resistancePierce,
+      convictionLevel: Math.max(targetStats.convictionLevel, selectedConvictionLevel),
+    };
+  }
   const defaultProfile = getDefaultDamageProfile(profiles);
   const defaultSkillSelection =
     skillOptions.find(
@@ -8392,6 +9086,7 @@ export function calculateDamage(
   const notes = [
     "Damage is an estimate built from PD2 game files. Totals combine immediate hit damage, expected Critical/Deadly Strike bonus damage, and modeled damage-over-time totals, but they do not include attack speed, cast speed, hit chance, target resistances, crushing blow, repeated summon attacks, or conditional buffs.",
     "Critical Strike is capped at 75% and checked before Deadly Strike; Deadly Strike is capped at 75% plus Maximum Deadly Strike, up to 100%. Expected strike bonuses apply only to instant physical attack damage, and weapon strike stats apply only to hits with that weapon.",
+    "External aura entries assume up to 20 invested skill points. Battle Command can give a different all-skills bonus if its caster has fewer invested points; owned Battle Command uses the character's actual invested points.",
   ];
 
   if (weaponSelections.some((selection) => selection.sequenceHits?.length)) {
@@ -8417,6 +9112,7 @@ export function calculateDamage(
   }
 
   return {
+    combat: buildCombatData(characterData, contexts, weaponSelections, skillOptions, playerAuraOptions),
     weaponOptions: weaponSelections.map((selection) => selection.option),
     skillOptions,
     playerAuraOptions,

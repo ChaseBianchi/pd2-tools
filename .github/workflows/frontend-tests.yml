@@ -5,11 +5,13 @@ on:
     branches: [main, master]
     paths:
       - "web/**"
+      - "api/src/game-data/**"
       - ".github/workflows/frontend-tests.yml"
   pull_request:
     branches: [main, master]
     paths:
       - "web/**"
+      - "api/src/game-data/**"
       - ".github/workflows/frontend-tests.yml"
 
 jobs:
@@ -39,6 +41,10 @@ jobs:
       - name: TypeScript check
         working-directory: ./web
         run: npx tsc --noEmit
+
+      - name: Check damage calculator TypeScript
+        working-directory: ./web
+        run: npx tsc -b tsconfig.damage.json
 
       - name: Lint
         working-directory: ./web
